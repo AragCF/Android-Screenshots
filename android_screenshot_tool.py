@@ -16,9 +16,10 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 APP_NAME = "Android Screenshot Tool"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 JPEG_QUALITY = 99
 ADB_TIMEOUT = 30
+SCREENSHOTS_DIR = "Screenshots"
 
 
 @dataclass(frozen=True)
@@ -306,13 +307,15 @@ def build_output_path(device: AndroidDevice, image_format: str) -> Path:
     model = sanitize_filename(device.display_name)
     stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     extension = ".jpg" if image_format == "JPG" else ".png"
-    base = Path.cwd() / f"{model}_{stamp}{extension}"
+    output_dir = Path.cwd() / SCREENSHOTS_DIR
+    output_dir.mkdir(parents=True, exist_ok=True)
+    base = output_dir / f"{model}_{stamp}{extension}"
     if not base.exists():
         return base
 
     counter = 2
     while True:
-        candidate = Path.cwd() / f"{model}_{stamp}_{counter}{extension}"
+        candidate = output_dir / f"{model}_{stamp}_{counter}{extension}"
         if not candidate.exists():
             return candidate
         counter += 1
@@ -366,6 +369,7 @@ def main() -> int:
 
     selected_device: Optional[AndroidDevice] = None
     image_format = "PNG"
+    main_selected_index = 0
 
     while True:
         selected_text = (
@@ -382,6 +386,7 @@ def main() -> int:
         choice = menu_choice(
             f"Выбранное устройство: {selected_text}",
             items,
+            selected_index=main_selected_index,
             footer="USB и сетевые устройства ADB отображаются в одном списке.",
         )
 
@@ -390,10 +395,12 @@ def main() -> int:
             return 0
 
         if choice == "1":
+            main_selected_index = 0
             selected_device = choose_device(selected_device)
             continue
 
         if choice == "3":
+            main_selected_index = 2
             if image_format == "PNG":
                 if ensure_pillow():
                     image_format = "JPG"
@@ -406,6 +413,7 @@ def main() -> int:
             continue
 
         if choice == "2":
+            main_selected_index = 1
             if selected_device is None:
                 selected_device = choose_device(None)
                 if selected_device is None:
