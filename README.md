@@ -1,4 +1,4 @@
-# Android Screenshot Tool 1.0.1
+# Android Screenshot Tool 1.0.2
 
 Консольная утилита для Windows и Linux, которая делает снимки экрана Android через `adb`.
 
@@ -47,6 +47,26 @@ python3 android_screenshot_tool.py
 ./run_linux.sh
 ```
 
+## Проверка версии
+
+```bash
+python android_screenshot_tool.py --version
+```
+
+Windows EXE:
+
+```bat
+AndroidScreenshotTool-v1.0.2-windows-x64.exe --version
+```
+
+После установки DEB:
+
+```bash
+android-screenshot-tool --version
+```
+
+Команда версии не требует подключённого Android и не запускает ADB.
+
 ## Главное меню
 
 1. Сменить устройство.
@@ -83,7 +103,7 @@ chmod +x build_deb.sh
 Установка готового пакета:
 
 ```bash
-sudo apt install ./dist/android-screenshot-tool_1.0.1_*.deb
+sudo apt install ./dist/android-screenshot-tool_1.0.2_*.deb
 ```
 
 После установки запуск:
@@ -97,3 +117,9 @@ android-screenshot-tool
 - Утилита не включает Android Platform Tools внутрь EXE/DEB и не меняет настройки ADB: по условию задачи `adb` уже должен быть доступен в `PATH`.
 - `build_exe.bat` нужно запускать именно в Windows: PyInstaller собирает исполняемый файл для текущей ОС.
 - `build_deb.sh` собирает пакет для архитектуры Linux-машины, на которой он запущен.
+
+## Готовые выпуски
+
+Тег `v1.0.2` запускает GitHub Actions, который собирает Windows EXE, Debian DEB, чистый ZIP исходников через `git archive`, файл `SHA256SUMS.txt` и публикует их в GitHub Releases.
+
+`Screenshots/`, кэши Python, виртуальные окружения и результаты локальной сборки в архив исходников не попадают.

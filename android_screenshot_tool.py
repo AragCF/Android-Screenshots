@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 APP_NAME = "Android Screenshot Tool"
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.0.2"
 JPEG_QUALITY = 99
 ADB_TIMEOUT = 30
 SCREENSHOTS_DIR = "Screenshots"
@@ -360,6 +360,10 @@ def wait_for_adb_ready() -> None:
 
 
 def main() -> int:
+    if len(sys.argv) == 2 and sys.argv[1] in {"--version", "-V"}:
+        print(f"{APP_NAME} {APP_VERSION}")
+        return 0
+
     try:
         wait_for_adb_ready()
     except RuntimeError as exc:

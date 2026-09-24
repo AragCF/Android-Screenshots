@@ -4,7 +4,7 @@ set -euo pipefail
 cd -- "$(dirname -- "$0")"
 
 APP_NAME="android-screenshot-tool"
-APP_VERSION="1.0.1"
+APP_VERSION="1.0.2"
 VENV=".venv-build-linux"
 DIST_DIR="dist"
 WORK_DIR="build/deb"

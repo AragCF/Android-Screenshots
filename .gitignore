@@ -8,3 +8,5 @@ dist/
 *.exe
 *.deb
 Screenshots/
+.venv-build-win/
+.venv-build-linux/
