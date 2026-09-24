@@ -123,3 +123,7 @@ android-screenshot-tool
 Тег `v1.0.2` запускает GitHub Actions, который собирает Windows EXE, Debian DEB, чистый ZIP исходников через `git archive`, файл `SHA256SUMS.txt` и публикует их в GitHub Releases.
 
 `Screenshots/`, кэши Python, виртуальные окружения и результаты локальной сборки в архив исходников не попадают.
+
+## Лицензия
+
+Проект распространяется по лицензии MIT. Полный текст лицензии находится в файле [LICENSE](LICENSE).
