@@ -1,5 +1,7 @@
 @echo off
 setlocal EnableExtensions
+set "NO_PAUSE=0"
+if /I "%~1"=="--no-pause" set "NO_PAUSE=1"
 cd /d "%~dp0"
 
 echo ================================================================
@@ -10,7 +12,7 @@ where python >nul 2>nul
 if errorlevel 1 (
     echo [ERROR] Python not found in PATH.
     echo Install Python 3 and enable "Add Python to PATH".
-    pause
+    if "%NO_PAUSE%"=="0" pause
     exit /b 1
 )
 
@@ -40,11 +42,11 @@ if errorlevel 1 goto :error
 echo [5/5] Done.
 echo.
 echo EXE: %CD%\dist\AndroidScreenshotTool.exe
-pause
+if "%NO_PAUSE%"=="0" pause
 exit /b 0
 
 :error
 echo.
 echo [ERROR] Build failed. Exit code: %ERRORLEVEL%
-pause
+if "%NO_PAUSE%"=="0" pause
 exit /b 1
