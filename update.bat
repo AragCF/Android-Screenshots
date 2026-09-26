@@ -23,7 +23,7 @@ cd /d "%REPO%"
 if errorlevel 1 goto :error
 
 echo ================================================================
-echo Android Screenshot Tool - обновление
+echo Android Screenshot Tool - полное обновление
 echo ================================================================
 echo.
 
@@ -33,7 +33,7 @@ if errorlevel 1 (
     goto :error
 )
 
-echo [1/6] Проверяю рабочее дерево...
+echo [1/8] Проверяю рабочее дерево...
 for /f "delims=" %%L in ('git status --porcelain') do (
     echo [ОШИБКА] В репозитории есть локальные изменения:
     git status --short
@@ -42,11 +42,11 @@ for /f "delims=" %%L in ('git status --porcelain') do (
     goto :error
 )
 
-echo [2/6] Получаю свежий main...
+echo [2/8] Получаю свежий main...
 git pull --ff-only origin main
 if errorlevel 1 goto :error
 
-echo [3/6] Проверяю Python...
+echo [3/8] Проверяю Python...
 set "PYTHON_CMD="
 where python >nul 2>nul && set "PYTHON_CMD=python"
 if not defined PYTHON_CMD (
@@ -59,27 +59,67 @@ if not defined PYTHON_CMD (
 
 %PYTHON_CMD% -m py_compile android_screenshot_tool.py
 if errorlevel 1 goto :error
-
-echo [4/6] Проверяю версию...
 %PYTHON_CMD% android_screenshot_tool.py --version
 if errorlevel 1 goto :error
 
-echo [5/6] Проверяю ADB...
+echo [4/8] Проверяю ADB...
 where adb >nul 2>nul
 if errorlevel 1 (
-    echo [ПРЕДУПРЕЖДЕНИЕ] adb не найден в PATH. Код обновлён, но для работы утилиты нужен ADB.
+    echo [ОШИБКА] adb не найден в PATH.
+    goto :error
+)
+adb version | findstr /B /C:"Android Debug Bridge" >nul 2>nul
+if errorlevel 1 (
+    echo [ПРЕДУПРЕЖДЕНИЕ] adb найден, но проверка версии дала неожиданный ответ.
 ) else (
-    adb version | findstr /B /C:"Android Debug Bridge" >nul 2>nul
     echo ADB найден.
 )
 
-echo [6/6] Итоговое состояние Git...
+echo [5/8] Проверяю scrcpy...
+where scrcpy >nul 2>nul
+if errorlevel 1 (
+    where winget >nul 2>nul
+    if not errorlevel 1 (
+        echo Устанавливаю scrcpy через WinGet...
+        winget install --id Genymobile.scrcpy --exact --source winget --accept-package-agreements --accept-source-agreements
+    ) else (
+        echo [ПРЕДУПРЕЖДЕНИЕ] scrcpy не найден, WinGet недоступен.
+        echo Программа попробует установить scrcpy при первой записи видео.
+    )
+) else (
+    echo scrcpy найден.
+)
+
+echo [6/8] Проверяю FFmpeg...
+where ffmpeg >nul 2>nul
+if errorlevel 1 (
+    where winget >nul 2>nul
+    if not errorlevel 1 (
+        echo Устанавливаю FFmpeg через WinGet...
+        winget install --id Gyan.FFmpeg --exact --source winget --accept-package-agreements --accept-source-agreements
+    ) else (
+        echo [ПРЕДУПРЕЖДЕНИЕ] FFmpeg не найден, WinGet недоступен.
+        echo Программа попробует установить FFmpeg при первой записи видео.
+    )
+) else (
+    echo FFmpeg найден.
+)
+
+echo [7/8] Пересобираю Windows EXE...
+call build_exe.bat --no-pause
+if errorlevel 1 goto :error
+
+echo [8/8] Итоговое состояние Git...
 git status --short --branch
 
 echo.
 echo ================================================================
 echo ОБНОВЛЕНИЕ ЗАВЕРШЕНО
-echo Запуск: python android_screenshot_tool.py
+echo Версия:
+%PYTHON_CMD% android_screenshot_tool.py --version
+echo.
+echo EXE:
+echo   %CD%\dist\AndroidScreenshotTool.exe
 echo ================================================================
 pause
 exit /b 0
