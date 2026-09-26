@@ -7,6 +7,7 @@ import io
 import json
 import os
 import re
+import signal
 import shutil
 import subprocess
 import sys
@@ -18,7 +19,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 APP_NAME = "Android Screenshot Tool"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.1"
 JPEG_QUALITY = 99
 ADB_TIMEOUT = 30
 SCREENSHOTS_DIR = "Screenshots"
@@ -535,8 +536,8 @@ def install_ffmpeg() -> Optional[str]:
         return existing
 
     clear_screen()
-    print("Для записи видео нужен FFmpeg.")
-    print("Он не включён внутрь программы: устанавливаю штатным менеджером пакетов...")
+    print("Для подготовки MP4 нужен FFmpeg.")
+    print("Пробую установить его автоматически...")
     print()
 
     if os.name == "nt":
@@ -586,7 +587,7 @@ def ensure_ffmpeg() -> str:
         )
 
     result = subprocess.run(
-        [path, "-hide_banner", "-encoders"],
+        [path, "-hide_banner", "-version"],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -594,39 +595,112 @@ def ensure_ffmpeg() -> str:
         errors="replace",
         check=False,
     )
-    if "libx264" not in result.stdout:
-        raise RuntimeError(
-            "Найденный FFmpeg не содержит кодировщик libx264. "
-            "Для совместимого MP4 нужен FFmpeg с libx264."
-        )
+    if result.returncode != 0:
+        raise RuntimeError("FFmpeg найден, но не запускается.")
     return path
 
 
-def detect_display_fps(device: AndroidDevice) -> float:
-    candidates: list[float] = []
+def scrcpy_candidates() -> list[Path]:
+    result: list[Path] = []
 
+    found = shutil.which("scrcpy")
+    if found:
+        result.append(Path(found))
+
+    if os.name == "nt":
+        local = os.getenv("LOCALAPPDATA")
+        if local:
+            result.append(Path(local) / "Microsoft" / "WinGet" / "Links" / "scrcpy.exe")
+
+    return result
+
+
+def locate_scrcpy() -> Optional[str]:
+    for candidate in scrcpy_candidates():
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
+def install_scrcpy() -> Optional[str]:
+    existing = locate_scrcpy()
+    if existing:
+        return existing
+
+    clear_screen()
+    print("Для надёжной записи видео нужен scrcpy.")
+    print("Пробую установить его автоматически...")
+    print()
+
+    if os.name == "nt":
+        winget = shutil.which("winget")
+        if not winget:
+            return None
+        result = subprocess.run(
+            [
+                winget,
+                "install",
+                "--id",
+                "Genymobile.scrcpy",
+                "--exact",
+                "--source",
+                "winget",
+                "--accept-package-agreements",
+                "--accept-source-agreements",
+            ],
+            check=False,
+        )
+        if result.returncode != 0:
+            return None
+        return locate_scrcpy()
+
+    apt = shutil.which("apt-get")
+    if apt:
+        prefix: list[str] = []
+        if hasattr(os, "geteuid") and os.geteuid() != 0:
+            sudo = shutil.which("sudo")
+            if not sudo:
+                return None
+            prefix = [sudo]
+        subprocess.run([*prefix, apt, "update"], check=False)
+        result = subprocess.run([*prefix, apt, "install", "-y", "scrcpy"], check=False)
+        if result.returncode == 0:
+            return locate_scrcpy()
+
+    return None
+
+
+def ensure_scrcpy() -> tuple[str, str]:
+    path = locate_scrcpy() or install_scrcpy()
+    if not path:
+        raise RuntimeError(
+            "scrcpy не найден и автоматически установить его не удалось. "
+            "На Windows выполните: winget install --exact Genymobile.scrcpy"
+        )
+
+    result = subprocess.run(
+        [path, "--help"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if result.returncode != 0 or "--record" not in result.stdout:
+        raise RuntimeError("scrcpy найден, но его версия не поддерживает запись.")
+    return path, result.stdout
+
+
+def get_android_api(device: AndroidDevice) -> int:
     try:
-        result = run_adb(["-s", device.serial, "shell", "dumpsys", "display"], timeout=10)
-        text = (result.stdout or "") + "\n" + (result.stderr or "")
-        patterns = [
-            r"mRefreshRate\s*=\s*([0-9]+(?:\.[0-9]+)?)",
-            r"refreshRate\s*[=:]\s*([0-9]+(?:\.[0-9]+)?)",
-            r"fps\s*[=:]\s*([0-9]+(?:\.[0-9]+)?)",
-        ]
-        for pattern in patterns:
-            for match in re.findall(pattern, text, flags=re.I):
-                try:
-                    value = float(match)
-                except ValueError:
-                    continue
-                if 20.0 <= value <= 240.0:
-                    candidates.append(value)
-    except RuntimeError:
-        pass
-
-    if candidates:
-        return candidates[0]
-    return 60.0
+        result = run_adb(
+            ["-s", device.serial, "shell", "getprop", "ro.build.version.sdk"],
+            timeout=5,
+        )
+        return int(result.stdout.strip())
+    except (RuntimeError, ValueError, AttributeError):
+        return 0
 
 
 def build_video_paths(device: AndroidDevice) -> tuple[Path, Path, Path, Path]:
@@ -638,10 +712,10 @@ def build_video_paths(device: AndroidDevice) -> tuple[Path, Path, Path, Path]:
     stem = output_dir / f"{model}_{stamp}"
 
     final = stem.with_suffix(".mp4")
-    recording = output_dir / f"{stem.name}.recording.mp4"
+    recording = output_dir / f"{stem.name}.recording.mkv"
     mic = output_dir / f"{stem.name}.mic.wav"
-    sidecar = output_dir / f"{stem.name}.recording.json"
-    return final, recording, mic, sidecar
+    log = output_dir / f"{stem.name}.scrcpy.log"
+    return final, recording, mic, log
 
 
 def find_tinycap(device: AndroidDevice) -> Optional[str]:
@@ -660,9 +734,9 @@ def find_tinycap(device: AndroidDevice) -> Optional[str]:
         except RuntimeError:
             continue
         if result.returncode == 0:
-            path = result.stdout.strip().splitlines()
-            if path:
-                return path[0].strip()
+            lines = result.stdout.strip().splitlines()
+            if lines:
+                return lines[0].strip()
     return None
 
 
@@ -676,8 +750,8 @@ def probe_android_microphone(device: AndroidDevice) -> Optional[TinycapProfile]:
         ("-r", "48000", "-b", "16", "-c", "2", "-t", "1"),
         ("-t", "1"),
     ]
-
     remote = "/data/local/tmp/android_screenshot_tool_mic_probe.wav"
+
     for args in profiles:
         try:
             run_adb(["-s", device.serial, "shell", "rm", "-f", remote], timeout=5)
@@ -696,22 +770,19 @@ def probe_android_microphone(device: AndroidDevice) -> Optional[TinycapProfile]:
                 size = int(size_result.stdout.strip())
             except (ValueError, AttributeError):
                 size = 0
+
             if size > 256:
-                run_adb(["-s", device.serial, "shell", "rm", "-f", remote], timeout=5)
-                record_args = tuple(x for x in args if x not in {"-t", "1"})
-                if "-t" in args:
-                    cleaned: list[str] = []
-                    skip = False
-                    for item in args:
-                        if skip:
-                            skip = False
-                            continue
-                        if item == "-t":
-                            skip = True
-                            continue
-                        cleaned.append(item)
-                    record_args = tuple(cleaned)
-                return TinycapProfile(executable=executable, args=record_args)
+                cleaned: list[str] = []
+                skip = False
+                for item in args:
+                    if skip:
+                        skip = False
+                        continue
+                    if item == "-t":
+                        skip = True
+                        continue
+                    cleaned.append(item)
+                return TinycapProfile(executable=executable, args=tuple(cleaned))
         except RuntimeError:
             continue
         finally:
@@ -729,12 +800,12 @@ def start_tinycap(
     remote_wav: str,
     remote_pid: str,
 ) -> subprocess.Popen:
-    shell_command = (
+    command = (
         f"echo $$ > {remote_pid}; "
         f"exec {profile.executable} {remote_wav} {' '.join(profile.args)}"
     )
     return subprocess.Popen(
-        [adb_path(), "-s", device.serial, "shell", "sh", "-c", shell_command],
+        [adb_path(), "-s", device.serial, "shell", "sh", "-c", command],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
     )
@@ -772,7 +843,7 @@ def stop_tinycap(
             except subprocess.TimeoutExpired:
                 process.kill()
 
-    time.sleep(0.4)
+    time.sleep(0.3)
     pull = run_adb(["-s", device.serial, "pull", remote_wav, str(local_wav)], timeout=30)
     ok = pull.returncode == 0 and local_wav.exists() and local_wav.stat().st_size > 256
 
@@ -783,8 +854,20 @@ def stop_tinycap(
         )
     except RuntimeError:
         pass
-
     return ok
+
+
+def _run_ffmpeg_finalize(command: list[str], tmp: Path) -> bool:
+    result = subprocess.run(
+        command,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    return result.returncode == 0 and tmp.exists() and tmp.stat().st_size > 1024
 
 
 def finalize_video(
@@ -792,12 +875,13 @@ def finalize_video(
     recording: Path,
     final: Path,
     mic: Optional[Path] = None,
+    mic_delay: float = 0.0,
 ) -> bool:
     tmp = final.with_name(final.stem + ".finalizing.mp4")
     if tmp.exists():
         tmp.unlink()
 
-    command = [
+    base = [
         ffmpeg,
         "-y",
         "-hide_banner",
@@ -808,7 +892,9 @@ def finalize_video(
     ]
 
     if mic and mic.exists() and mic.stat().st_size > 256:
-        command += [
+        command = base + [
+            "-itsoffset",
+            f"{max(0.0, mic_delay):.3f}",
             "-i",
             str(mic),
             "-map",
@@ -822,23 +908,46 @@ def finalize_video(
             "-b:a",
             "128k",
             "-shortest",
+            "-movflags",
+            "+faststart",
+            str(tmp),
         ]
+        ok = _run_ffmpeg_finalize(command, tmp)
     else:
-        command += ["-map", "0:v:0", "-c:v", "copy", "-an"]
+        command = base + [
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a?",
+            "-c",
+            "copy",
+            "-movflags",
+            "+faststart",
+            str(tmp),
+        ]
+        ok = _run_ffmpeg_finalize(command, tmp)
 
-    command += ["-movflags", "+faststart", str(tmp)]
+        if not ok:
+            if tmp.exists():
+                tmp.unlink()
+            command = base + [
+                "-map",
+                "0:v:0",
+                "-map",
+                "0:a?",
+                "-c:v",
+                "copy",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "128k",
+                "-movflags",
+                "+faststart",
+                str(tmp),
+            ]
+            ok = _run_ffmpeg_finalize(command, tmp)
 
-    result = subprocess.run(
-        command,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-    )
-
-    if result.returncode != 0 or not tmp.exists() or tmp.stat().st_size < 1024:
+    if not ok:
         if tmp.exists():
             tmp.unlink()
         return False
@@ -856,288 +965,188 @@ def finalize_video(
     return True
 
 
-def recover_interrupted_videos(ffmpeg: Optional[str]) -> list[str]:
+def _unique_recovered_path(output_dir: Path, base_name: str) -> Path:
+    first = output_dir / f"{base_name}_recovered.mp4"
+    if not first.exists():
+        return first
+    counter = 2
+    while True:
+        candidate = output_dir / f"{base_name}_recovered_{counter}.mp4"
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+
+def quarantine_legacy_recordings() -> list[str]:
     output_dir = Path.cwd() / VIDEOS_DIR
     if not output_dir.exists():
         return []
 
-    messages: list[str] = []
     recordings = sorted(output_dir.glob("*.recording.mp4"))
+    if not recordings:
+        return []
+
+    legacy_dir = output_dir / "Legacy_1.1.0"
+    legacy_dir.mkdir(parents=True, exist_ok=True)
+    moved = 0
+
+    for recording in recordings:
+        base = recording.name.removesuffix(".recording.mp4")
+        related = [
+            recording,
+            output_dir / f"{base}.recording.ffmpeg.log",
+            output_dir / f"{base}.mic.wav",
+            output_dir / f"{base}.recording.json",
+        ]
+        for path in related:
+            if not path.exists():
+                continue
+            target = legacy_dir / path.name
+            if target.exists():
+                target = legacy_dir / f"{int(time.time())}_{path.name}"
+            try:
+                shutil.move(str(path), str(target))
+            except OSError:
+                continue
+        moved += 1
+
+    if moved:
+        return [
+            f"Найдено старых незавершённых записей видеодвижка 1.1.0: {moved}. "
+            f"Они перенесены без повторной обработки в {legacy_dir}"
+        ]
+    return []
+
+
+def _file_is_stable(path: Path) -> bool:
+    try:
+        size1 = path.stat().st_size
+        time.sleep(0.5)
+        size2 = path.stat().st_size
+        return size1 == size2
+    except OSError:
+        return False
+
+
+def recover_interrupted_videos(ffmpeg: Optional[str]) -> list[str]:
+    messages = quarantine_legacy_recordings()
+
+    output_dir = Path.cwd() / VIDEOS_DIR
+    if not output_dir.exists():
+        return messages
+
+    recordings = sorted(output_dir.glob("*.recording.mkv"))
     if not recordings:
         return messages
 
     if not ffmpeg:
-        return [
-            f"Найдены незавершённые видеозаписи: {len(recordings)}. "
+        messages.append(
+            f"Найдены незавершённые новые видеозаписи: {len(recordings)}. "
             "Для автоматического восстановления нужен FFmpeg."
-        ]
+        )
+        return messages
 
     for recording in recordings:
-        base_name = recording.name.removesuffix(".recording.mp4")
-        final = output_dir / f"{base_name}.mp4"
-        mic = output_dir / f"{base_name}.mic.wav"
-        if final.exists():
-            final = output_dir / f"{base_name}_recovered.mp4"
+        if not _file_is_stable(recording):
+            messages.append(f"Запись ещё изменяется и пока не восстанавливается: {recording}")
+            continue
 
-        if finalize_video(ffmpeg, recording, final, mic if mic.exists() else None):
+        base_name = recording.name.removesuffix(".recording.mkv")
+        final = output_dir / f"{base_name}.mp4"
+        if final.exists():
+            final = _unique_recovered_path(output_dir, base_name)
+
+        if finalize_video(ffmpeg, recording, final):
             messages.append(f"Восстановлена запись: {final}")
         else:
             messages.append(
                 f"Не удалось автоматически восстановить: {recording}. "
-                "Файл оставлен без изменений."
+                "Исходный MKV оставлен без изменений."
             )
+
     return messages
 
 
-class VideoCaptureSession:
-    def __init__(
-        self,
-        device: AndroidDevice,
-        ffmpeg: str,
-        target_fps: int,
-        source_fps: float,
-        recording_path: Path,
-    ) -> None:
-        self.device = device
-        self.ffmpeg = ffmpeg
-        self.target_fps = target_fps
-        self.source_fps = source_fps
-        self.recording_path = recording_path
-        self.stop_event = threading.Event()
-        self.error: Optional[str] = None
-        self.bytes_received = 0
-        self._adb_lock = threading.Lock()
-        self._adb_process: Optional[subprocess.Popen] = None
-        self._stderr_tail: list[str] = []
-        self._thread: Optional[threading.Thread] = None
-        self.remote_pid_path = "/data/local/tmp/android_screenshot_tool_screenrecord.pid"
+def _scrcpy_record_command(
+    scrcpy: str,
+    help_text: str,
+    device: AndroidDevice,
+    recording: Path,
+    max_fps: int,
+    use_scrcpy_mic: bool,
+) -> list[str]:
+    command = [scrcpy, "--serial", device.serial, "--record", str(recording)]
 
-        log_path = recording_path.with_suffix(".ffmpeg.log")
-        self.log_path = log_path
-        self._log_handle = log_path.open("wb")
+    if "--record-format" in help_text:
+        command.append("--record-format=mkv")
 
-        command = [
-            ffmpeg,
-            "-y",
-            "-hide_banner",
-            "-loglevel",
-            "warning",
-            "-r",
-            f"{source_fps:.3f}",
-            "-f",
-            "h264",
-            "-i",
-            "pipe:0",
-            "-vf",
-            f"fps={target_fps}",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "ultrafast",
-            "-tune",
-            "zerolatency",
-            "-crf",
-            "20",
-            "-pix_fmt",
-            "yuv420p",
-            "-tag:v",
-            "avc1",
-            "-g",
-            str(target_fps),
-            "-keyint_min",
-            str(target_fps),
-            "-sc_threshold",
-            "0",
-            "-an",
-            "-movflags",
-            "+empty_moov+default_base_moof+frag_keyframe",
-            "-frag_duration",
-            "1000000",
-            "-flush_packets",
-            "1",
-            "-f",
-            "mp4",
-            str(recording_path),
-        ]
+    if "--no-playback" in help_text:
+        command.append("--no-playback")
+    elif "--no-display" in help_text:
+        command.append("--no-display")
 
-        self.ffmpeg_process = subprocess.Popen(
-            command,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
-            stderr=self._log_handle,
-        )
+    if "--no-window" in help_text:
+        command.append("--no-window")
+    if "--no-control" in help_text:
+        command.append("--no-control")
 
-    def start(self) -> None:
-        self._thread = threading.Thread(target=self._producer, daemon=True)
-        self._thread.start()
+    if "--max-fps" in help_text:
+        command.append(f"--max-fps={max_fps}")
 
-    def _read_stderr(self, proc: subprocess.Popen) -> None:
-        if proc.stderr is None:
-            return
-        try:
-            data = proc.stderr.read()
-            if data:
-                text = data.decode("utf-8", errors="replace")
-                self._stderr_tail.append(text[-2000:])
-                self._stderr_tail[:] = self._stderr_tail[-3:]
-        except Exception:
-            pass
+    if "--capture-orientation" in help_text:
+        command.append("--capture-orientation=@")
+    elif "--lock-video-orientation" in help_text:
+        command.append("--lock-video-orientation")
 
-    def _producer(self) -> None:
-        restart_count = 0
-        try:
-            while not self.stop_event.is_set():
-                remote_command = (
-                    f"echo $ > {self.remote_pid_path}; "
-                    "exec screenrecord --output-format=h264 -"
-                )
-                proc = subprocess.Popen(
-                    [
-                        adb_path(),
-                        "-s",
-                        self.device.serial,
-                        "exec-out",
-                        "sh",
-                        "-c",
-                        remote_command,
-                    ],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                )
-                with self._adb_lock:
-                    self._adb_process = proc
+    if "--video-codec" in help_text:
+        command.append("--video-codec=h264")
 
-                stderr_thread = threading.Thread(
-                    target=self._read_stderr,
-                    args=(proc,),
-                    daemon=True,
-                )
-                stderr_thread.start()
+    if use_scrcpy_mic:
+        command.append("--audio-source=mic")
+        if "--audio-codec" in help_text:
+            command.append("--audio-codec=aac")
+        if "--require-audio" in help_text:
+            command.append("--require-audio")
+    elif "--no-audio" in help_text:
+        command.append("--no-audio")
 
-                got_data = False
-                assert proc.stdout is not None
-                while not self.stop_event.is_set():
-                    chunk = proc.stdout.read(64 * 1024)
-                    if not chunk:
-                        break
-                    got_data = True
-                    self.bytes_received += len(chunk)
-                    if self.ffmpeg_process.stdin is None:
-                        raise RuntimeError("FFmpeg stdin недоступен")
-                    try:
-                        self.ffmpeg_process.stdin.write(chunk)
-                        self.ffmpeg_process.stdin.flush()
-                    except (BrokenPipeError, OSError):
-                        raise RuntimeError("FFmpeg неожиданно завершил приём видеопотока")
+    return command
 
-                if self.stop_event.is_set():
-                    break
 
-                rc = proc.wait(timeout=2)
-                if not got_data or rc != 0:
-                    detail = "\n".join(self._stderr_tail[-2:]).strip()
-                    self.error = (
-                        "Не удалось получить H.264-поток через Android screenrecord."
-                        + (f"\n{detail}" if detail else "")
-                    )
-                    break
+def _stop_scrcpy(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
 
-                restart_count += 1
-                if restart_count > 1000:
-                    self.error = "Слишком много автоматических перезапусков screenrecord."
-                    break
-                time.sleep(0.15)
-        except Exception as exc:
-            self.error = str(exc)
-        finally:
-            with self._adb_lock:
-                self._adb_process = None
-            if self.ffmpeg_process.stdin is not None:
-                try:
-                    self.ffmpeg_process.stdin.close()
-                except OSError:
-                    pass
+    try:
+        if os.name == "nt" and hasattr(signal, "CTRL_BREAK_EVENT"):
+            process.send_signal(signal.CTRL_BREAK_EVENT)
+        else:
+            process.send_signal(signal.SIGINT)
+        process.wait(timeout=10)
+        return
+    except (OSError, subprocess.TimeoutExpired):
+        pass
 
-    def is_running(self) -> bool:
-        if self.error:
-            return False
-        if self.ffmpeg_process.poll() is not None:
-            return False
-        if self._thread and not self._thread.is_alive():
-            return False
-        return True
+    try:
+        process.terminate()
+        process.wait(timeout=5)
+        return
+    except (OSError, subprocess.TimeoutExpired):
+        pass
 
-    def stop(self) -> None:
-        self.stop_event.set()
-        with self._adb_lock:
-            proc = self._adb_process
+    try:
+        process.kill()
+        process.wait(timeout=3)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
 
-        try:
-            run_adb(
-                [
-                    "-s",
-                    self.device.serial,
-                    "shell",
-                    "sh",
-                    "-c",
-                    (
-                        f"if [ -f {self.remote_pid_path} ]; then "
-                        f"kill -2 $(cat {self.remote_pid_path}) 2>/dev/null; fi"
-                    ),
-                ],
-                timeout=4,
-            )
-        except RuntimeError:
-            pass
 
-        if proc is not None and proc.poll() is None:
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                try:
-                    proc.terminate()
-                except OSError:
-                    pass
-
-        if self._thread:
-            self._thread.join(timeout=8)
-
-        try:
-            run_adb(
-                ["-s", self.device.serial, "shell", "rm", "-f", self.remote_pid_path],
-                timeout=4,
-            )
-        except RuntimeError:
-            pass
-
-        if self.ffmpeg_process.stdin is not None and not self.ffmpeg_process.stdin.closed:
-            try:
-                self.ffmpeg_process.stdin.close()
-            except OSError:
-                pass
-
-        try:
-            self.ffmpeg_process.wait(timeout=12)
-        except subprocess.TimeoutExpired:
-            self.ffmpeg_process.terminate()
-            try:
-                self.ffmpeg_process.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                self.ffmpeg_process.kill()
-
-        try:
-            self._log_handle.close()
-        except OSError:
-            pass
-
-        if self.ffmpeg_process.returncode not in (0, None) and not self.error:
-            self.error = f"FFmpeg завершился с кодом {self.ffmpeg_process.returncode}."
-
-        if not self.error and self.log_path.exists():
-            try:
-                self.log_path.unlink()
-            except OSError:
-                pass
+def _tail_text(path: Path, limit: int = 4000) -> str:
+    try:
+        data = path.read_text(encoding="utf-8", errors="replace")
+        return data[-limit:].strip()
+    except OSError:
+        return ""
 
 
 def record_video(
@@ -1147,82 +1156,108 @@ def record_video(
     mic_profile_cache: dict[str, TinycapProfile],
 ) -> tuple[Optional[Path], Optional[str]]:
     ffmpeg = ensure_ffmpeg()
-    source_fps = detect_display_fps(device)
-    final, recording, mic, sidecar = build_video_paths(device)
+    scrcpy, help_text = ensure_scrcpy()
+    final, recording, mic, log = build_video_paths(device)
 
-    mic_profile: Optional[TinycapProfile] = None
+    api = get_android_api(device)
+    use_scrcpy_mic = bool(
+        want_audio
+        and api >= 30
+        and "--audio-source" in help_text
+    )
+
+    tinycap_profile: Optional[TinycapProfile] = None
     mic_process: Optional[subprocess.Popen] = None
     remote_wav = ""
     remote_pid = ""
+    mic_delay = 0.0
+    audio_note: Optional[str] = None
 
-    if want_audio:
-        mic_profile = mic_profile_cache.get(device.serial)
-        if mic_profile is None:
-            clear_screen()
-            print("Проверяю возможность захвата микрофона Android через tinycap...")
-            mic_profile = probe_android_microphone(device)
-            if mic_profile:
-                mic_profile_cache[device.serial] = mic_profile
+    if want_audio and not use_scrcpy_mic:
+        tinycap_profile = mic_profile_cache.get(device.serial)
+        if tinycap_profile is None:
+            tinycap_profile = probe_android_microphone(device)
+            if tinycap_profile:
+                mic_profile_cache[device.serial] = tinycap_profile
 
-        if mic_profile:
-            token = re.sub(r"[^A-Za-z0-9_]", "_", final.stem)
-            remote_wav = f"/data/local/tmp/{token}.wav"
-            remote_pid = f"/data/local/tmp/{token}.pid"
-            sidecar.write_text(
-                json.dumps(
-                    {
-                        "serial": device.serial,
-                        "remote_wav": remote_wav,
-                        "remote_pid": remote_pid,
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-            mic_process = start_tinycap(
-                device,
-                mic_profile,
-                remote_wav,
-                remote_pid,
+        if tinycap_profile is None:
+            audio_note = (
+                "Микрофон недоступен: на Android ниже 11 scrcpy не умеет захватывать "
+                "аудио, а tinycap на этой прошивке недоступен. Видео записано без звука."
             )
 
-    session = VideoCaptureSession(
-        device=device,
-        ffmpeg=ffmpeg,
-        target_fps=target_fps,
-        source_fps=source_fps,
-        recording_path=recording,
+    command = _scrcpy_record_command(
+        scrcpy,
+        help_text,
+        device,
+        recording,
+        target_fps,
+        use_scrcpy_mic,
     )
-    session.start()
+
+    creationflags = 0
+    if os.name == "nt" and hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+
+    log_handle = log.open("wb")
+    video_start = time.monotonic()
+    process = subprocess.Popen(
+        command,
+        stdout=log_handle,
+        stderr=subprocess.STDOUT,
+        creationflags=creationflags,
+    )
+
+    if tinycap_profile:
+        token = re.sub(r"[^A-Za-z0-9_]", "_", final.stem)
+        remote_wav = f"/data/local/tmp/{token}.wav"
+        remote_pid = f"/data/local/tmp/{token}.pid"
+        mic_start = time.monotonic()
+        mic_delay = max(0.0, mic_start - video_start)
+        mic_process = start_tinycap(
+            device,
+            tinycap_profile,
+            remote_wav,
+            remote_pid,
+        )
+
+    time.sleep(0.8)
+    if process.poll() is not None:
+        log_handle.close()
+        detail = _tail_text(log)
+        return None, (
+            "scrcpy не смог начать запись."
+            + (f"\n{detail}" if detail else "")
+        )
 
     clear_screen()
     print(f"{APP_NAME} v{APP_VERSION}")
     print("=" * 72)
     print(f"Запись видео: {device.display_name} [{device.serial}]")
-    print(f"Выходной FPS: {target_fps}")
-    print(f"Определённая частота дисплея: {source_fps:.2f} Гц")
-    if target_fps > source_fps + 0.5:
-        print("Примечание: выходной FPS выше исходного — часть кадров будет повторяться.")
-    print(
-        "Микрофон Android: "
-        + ("включён (tinycap)" if mic_profile else ("недоступен — запись без звука" if want_audio else "выключен"))
-    )
+    print(f"Лимит FPS: {target_fps}")
+    print("Ориентация: фиксируется по текущей ориентации устройства при старте записи.")
+    if use_scrcpy_mic:
+        print("Микрофон Android: включён через scrcpy.")
+    elif tinycap_profile:
+        print("Микрофон Android: включён через tinycap.")
+    else:
+        print("Микрофон Android: выключен." if not want_audio else "Микрофон Android: недоступен.")
     print()
-    print("Файл во время записи защищён фрагментированным MP4.")
+    print("Во время записи используется временный MKV; после остановки он быстро")
+    print("перепаковывается без перекодирования в MP4 с faststart.")
     print("Нажмите Enter или Esc для остановки.")
     print("=" * 72)
 
-    while session.is_running():
+    while process.poll() is None:
         key = read_key_timeout(0.25)
         if key in {Key.ENTER, Key.ESC, "0"}:
             break
 
-    session.stop()
+    _stop_scrcpy(process)
+    log_handle.close()
 
     audio_ok = False
-    if mic_profile and remote_wav and remote_pid:
+    if tinycap_profile and remote_wav and remote_pid:
         try:
             audio_ok = stop_tinycap(
                 device,
@@ -1233,53 +1268,48 @@ def record_video(
             )
         except Exception:
             audio_ok = False
-        try:
-            sidecar.unlink()
-        except OSError:
-            pass
-
-    if session.error:
-        return None, (
-            session.error
-            + "\nНезавершённый фрагментированный MP4 оставлен здесь: "
-            + str(recording)
-        )
 
     if not recording.exists() or recording.stat().st_size < 1024:
-        return None, "Запись не создала пригодного видеопотока."
+        detail = _tail_text(log)
+        return None, (
+            "scrcpy не создал пригодный видеофайл."
+            + (f"\n{detail}" if detail else "")
+        )
 
     if finalize_video(
         ffmpeg,
         recording,
         final,
         mic if audio_ok else None,
+        mic_delay=mic_delay,
     ):
-        note = None
-        if want_audio and not audio_ok:
-            note = (
-                "Видео сохранено без звука: микрофон Android недоступен "
-                "через tinycap на этом устройстве."
-            )
-        return final, note
+        try:
+            log.unlink()
+        except OSError:
+            pass
+
+        if want_audio and tinycap_profile and not audio_ok:
+            audio_note = "Видео сохранено, но tinycap не вернул пригодную аудиодорожку."
+        return final, audio_note
 
     return recording, (
-        "Не удалось выполнить финальную перепаковку. "
-        "Оставлен фрагментированный MP4; он предназначен для аварийного восстановления."
+        "Не удалось перепаковать MKV в MP4. Временный MKV оставлен без изменений; "
+        "его можно открыть непосредственно или восстановить при следующем запуске."
     )
 
 
 def choose_video_fps(current: int) -> int:
-    items = [(str(index), f"{fps} FPS") for index, fps in enumerate(FPS_OPTIONS, start=1)]
+    items = [(str(index), f"до {fps} FPS") for index, fps in enumerate(FPS_OPTIONS, start=1)]
     items.append(("0", "Назад"))
     selected_index = FPS_OPTIONS.index(current) if current in FPS_OPTIONS else FPS_OPTIONS.index(30)
 
     choice = menu_choice(
-        "Частота кадров итогового MP4",
+        "Ограничение частоты кадров",
         items,
         selected_index=selected_index,
         footer=(
-            "Если Android отдаёт меньше уникальных кадров, повышение FPS "
-            "не создаёт новых деталей: недостающие кадры будут повторяться."
+            "scrcpy ограничивает максимальную частоту захвата. Реальная частота может быть "
+            "ниже, если содержимое экрана обновляется реже."
         ),
     )
     if choice == "0":
@@ -1297,7 +1327,7 @@ def video_settings_menu(
     while True:
         audio_label = "включён" if settings["video_audio"] else "выключен"
         items = [
-            ("1", f"FPS итогового MP4: {settings['video_fps']}"),
+            ("1", f"Лимит FPS: {settings['video_fps']}"),
             ("2", f"Микрофон Android: {audio_label}"),
             ("0", "Назад"),
         ]
@@ -1306,9 +1336,8 @@ def video_settings_menu(
             items,
             selected_index=selected_index,
             footer=(
-                "FPS задаёт частоту итогового файла. "
-                "Звук через стандартный screenrecord невозможен; "
-                "микрофон используется только если устройство предоставляет tinycap."
+                "Видео записывает scrcpy. Микрофон штатно доступен через scrcpy на Android 11+, "
+                "а на старых прошивках программа дополнительно пробует tinycap."
             ),
         )
 
@@ -1333,17 +1362,19 @@ def video_settings_menu(
                 if selected_device is None:
                     continue
 
+            api = get_android_api(selected_device)
+            if api >= 30:
+                settings["video_audio"] = True
+                save_settings(settings)
+                continue
+
             clear_screen()
-            print("Проверяю микрофон Android. Это займёт около секунды...")
+            print("Android ниже 11: проверяю дополнительный путь через tinycap...")
             profile = probe_android_microphone(selected_device)
             if profile is None:
                 print()
-                print("На этом устройстве микрофон через ADB недоступен.")
-                print(
-                    "Стандартный Android screenrecord звук не записывает. "
-                    "Для универсального решения потребовалось бы отдельное Android-приложение "
-                    "с разрешением RECORD_AUDIO."
-                )
+                print("Микрофон на этой прошивке через ADB недоступен.")
+                print("Видео по-прежнему можно записывать без звука.")
                 settings["video_audio"] = False
                 save_settings(settings)
                 pause()
