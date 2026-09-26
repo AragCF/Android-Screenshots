@@ -80,7 +80,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y dpkg-dev
+          sudo apt-get install -y dpkg-dev ffmpeg
           python -m pip install --upgrade pip
           python -m pip install "Pillow>=10.0" "PyInstaller>=6.0"
           VERSION="${GITHUB_REF_NAME#v}"
@@ -97,8 +97,9 @@ jobs:
           Section: utils
           Priority: optional
           Architecture: $ARCH
+          Depends: ffmpeg
           Maintainer: AragCF
-          Description: Interactive ADB screenshot utility for Android devices
+          Description: Interactive ADB screenshot and video utility for Android devices
            Captures Android screenshots through adb, supports USB and network devices,
            PNG and JPEG quality 99, keyboard navigation and timestamped filenames.
           EOF
@@ -128,7 +129,7 @@ jobs:
           mkdir -p release
           git archive --format=zip --prefix="Android-Screenshot-Tool-v${VERSION}/" -o "release/Android-Screenshot-Tool-v${VERSION}-source.zip" HEAD
           unzip -l "release/Android-Screenshot-Tool-v${VERSION}-source.zip"
-          if unzip -l "release/Android-Screenshot-Tool-v${VERSION}-source.zip" | grep -E '(__pycache__|Screenshots/|\.venv|/dist/|/build/)'; then
+          if unzip -l "release/Android-Screenshot-Tool-v${VERSION}-source.zip" | grep -E '(__pycache__|Screenshots/|Videos/|\.venv|/dist/|/build/)'; then
             echo "Forbidden local/build content found in source archive"
             exit 1
           fi

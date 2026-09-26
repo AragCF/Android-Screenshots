@@ -4,7 +4,7 @@ set -euo pipefail
 cd -- "$(dirname -- "$0")"
 
 APP_NAME="android-screenshot-tool"
-APP_VERSION="1.0.2"
+APP_VERSION="1.1.0"
 VENV=".venv-build-linux"
 DIST_DIR="dist"
 WORK_DIR="build/deb"
@@ -26,7 +26,7 @@ fi
 
 install_apt_packages() {
   if ! command -v apt-get >/dev/null 2>&1; then
-    echo "[ОШИБКА] apt-get не найден. Установите вручную: python3 python3-venv python3-pip dpkg-dev"
+    echo "[ОШИБКА] apt-get не найден. Установите вручную: python3 python3-venv python3-pip dpkg-dev ffmpeg"
     exit 1
   fi
   if [ "$have_sudo" -ne 1 ]; then
@@ -35,12 +35,13 @@ install_apt_packages() {
     exit 1
   fi
   $SUDO apt-get update
-  $SUDO apt-get install -y python3 python3-venv python3-pip dpkg-dev
+  $SUDO apt-get install -y python3 python3-venv python3-pip dpkg-dev ffmpeg
 }
 
 need_apt=0
 command -v python3 >/dev/null 2>&1 || need_apt=1
 command -v dpkg-deb >/dev/null 2>&1 || need_apt=1
+command -v ffmpeg >/dev/null 2>&1 || need_apt=1
 
 if [ "$need_apt" -eq 1 ]; then
   echo "[1/7] Устанавливаю системные зависимости сборки..."
@@ -92,10 +93,11 @@ Version: $APP_VERSION
 Section: utils
 Priority: optional
 Architecture: $ARCH
+Depends: ffmpeg
 Maintainer: Local Build <local@localhost>
-Description: Interactive ADB screenshot utility for USB and network Android devices
- Captures Android screenshots through adb, supports PNG and JPEG quality 99,
- device selection, arrow-key navigation, and timestamped filenames.
+Description: Interactive ADB screenshot and video utility for Android devices
+ Captures screenshots and H.264 MP4 video through adb, supports USB and network
+ devices, keyboard navigation, persistent settings and timestamped filenames.
 EOF
 
 echo "[6/7] Собираю DEB-пакет..."
