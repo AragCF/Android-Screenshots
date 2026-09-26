@@ -4,7 +4,7 @@ set -euo pipefail
 cd -- "$(dirname -- "$0")"
 
 APP_NAME="android-screenshot-tool"
-APP_VERSION="1.1.0"
+APP_VERSION="1.1.1"
 VENV=".venv-build-linux"
 DIST_DIR="dist"
 WORK_DIR="build/deb"
@@ -94,10 +94,11 @@ Section: utils
 Priority: optional
 Architecture: $ARCH
 Depends: ffmpeg
+Recommends: scrcpy
 Maintainer: Local Build <local@localhost>
-Description: Interactive ADB screenshot and video utility for Android devices
- Captures screenshots and H.264 MP4 video through adb, supports USB and network
- devices, keyboard navigation, persistent settings and timestamped filenames.
+Description: Interactive Android screenshot and video utility
+ Captures screenshots through adb and records H.264 video through scrcpy, supports
+ USB and network devices, persistent settings and timestamped filenames.
 EOF
 
 echo "[6/7] Собираю DEB-пакет..."
