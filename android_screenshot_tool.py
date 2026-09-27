@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 APP_NAME = "Android Screenshot Tool"
-APP_VERSION = "1.1.2"
+APP_VERSION = "1.1.3"
 JPEG_QUALITY = 99
 ADB_TIMEOUT = 30
 SCREENSHOTS_DIR = "Screenshots"
@@ -467,85 +467,7 @@ def build_output_path(device: AndroidDevice, image_format: str) -> Path:
         counter += 1
 
 
-def png_dimensions(data: bytes) -> Optional[tuple[int, int]]:
-    if len(data) < 24 or not data.startswith(b"\x89PNG\r\n\x1a\n"):
-        return None
-    if data[12:16] != b"IHDR":
-        return None
-    width = int.from_bytes(data[16:20], "big")
-    height = int.from_bytes(data[20:24], "big")
-    if width <= 0 or height <= 0:
-        return None
-    return width, height
-
-
-def _parse_display_size_from_text(text: str) -> Optional[tuple[int, int]]:
-    patterns = [
-        r"\bcur=(\d+)x(\d+)",
-        r"\breal\s+(\d+)\s*x\s*(\d+)",
-        r"\bDisplayWidth=(\d+)\b.*?\bDisplayHeight=(\d+)",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, text, flags=re.I | re.S)
-        if match:
-            width = int(match.group(1))
-            height = int(match.group(2))
-            if width > 0 and height > 0:
-                return width, height
-    return None
-
-
-def get_current_display_size(device: AndroidDevice) -> Optional[tuple[int, int]]:
-    # Для старых Android наиболее надёжна пара wm size + SurfaceOrientation:
-    # wm size обычно даёт размер матрицы в естественной ориентации,
-    # а SurfaceOrientation сообщает текущий поворот SurfaceFlinger.
-    try:
-        size_result = run_adb(["-s", device.serial, "shell", "wm", "size"], timeout=5)
-        size_text = (size_result.stdout or "") + "\n" + (size_result.stderr or "")
-        matches = re.findall(
-            r"(?:Physical|Override) size:\s*(\d+)x(\d+)",
-            size_text,
-            flags=re.I,
-        )
-        if matches:
-            width, height = map(int, matches[-1])
-            try:
-                input_result = run_adb(
-                    ["-s", device.serial, "shell", "dumpsys", "input"],
-                    timeout=8,
-                )
-                input_text = (input_result.stdout or "") + "\n" + (input_result.stderr or "")
-                match = re.search(r"SurfaceOrientation:\s*(\d+)", input_text)
-                if match:
-                    rotation = int(match.group(1))
-                    if rotation in (1, 3):
-                        return height, width
-                    if rotation in (0, 2):
-                        return width, height
-            except RuntimeError:
-                pass
-    except (RuntimeError, ValueError):
-        pass
-
-    # Запасные источники для vendor-ROM, где SurfaceOrientation отсутствует.
-    probes = [
-        ["-s", device.serial, "shell", "dumpsys", "window", "displays"],
-        ["-s", device.serial, "shell", "dumpsys", "display"],
-    ]
-
-    for args in probes:
-        try:
-            result = run_adb(args, timeout=8)
-        except RuntimeError:
-            continue
-        text = (result.stdout or "") + "\n" + (result.stderr or "")
-        size = _parse_display_size_from_text(text)
-        if size:
-            return size
-
-    return None
-
-def _capture_png_exec_out(device: AndroidDevice) -> bytes:
+def capture_png(device: AndroidDevice) -> bytes:
     result = run_adb(
         ["-s", device.serial, "exec-out", "screencap", "-p"],
         timeout=ADB_TIMEOUT,
@@ -554,119 +476,9 @@ def _capture_png_exec_out(device: AndroidDevice) -> bytes:
     if result.returncode != 0:
         stderr = result.stderr.decode("utf-8", errors="replace").strip() if result.stderr else ""
         raise RuntimeError(stderr or "Не удалось получить снимок экрана через adb screencap.")
-    return result.stdout or b""
-
-
-def _capture_png_remote_file(device: AndroidDevice) -> bytes:
-    token = f"android_screenshot_tool_{os.getpid()}_{int(time.time() * 1000)}.png"
-    remote = f"/data/local/tmp/{token}"
-    try:
-        result = run_adb(
-            ["-s", device.serial, "shell", "screencap", "-p", remote],
-            timeout=ADB_TIMEOUT,
-        )
-        if result.returncode != 0:
-            error = (result.stderr or result.stdout).strip()
-            raise RuntimeError(error or "Не удалось создать временный снимок на Android.")
-
-        cat_result = run_adb(
-            ["-s", device.serial, "exec-out", "cat", remote],
-            timeout=ADB_TIMEOUT,
-            binary=True,
-        )
-        if cat_result.returncode != 0:
-            stderr = (
-                cat_result.stderr.decode("utf-8", errors="replace").strip()
-                if cat_result.stderr
-                else ""
-            )
-            raise RuntimeError(stderr or "Не удалось прочитать временный снимок Android.")
-        return cat_result.stdout or b""
-    finally:
-        try:
-            run_adb(["-s", device.serial, "shell", "rm", "-f", remote], timeout=5)
-        except RuntimeError:
-            pass
-
-
-def _legacy_capture_geometry_is_stale(
-    png_size: tuple[int, int],
-    display_size: Optional[tuple[int, int]],
-) -> bool:
-    if not display_size:
-        return False
-
-    pw, ph = png_size
-    dw, dh = display_size
-
-    if (pw, ph) == (dw, dh):
-        return False
-
-    # Самый характерный сбой старых vendor-ROM: SurfaceFlinger живёт в landscape,
-    # а screencap возвращает старый framebuffer той же площади в portrait.
-    if pw * ph == dw * dh and (pw, ph) == (dh, dw):
-        return True
-
-    return False
-
-
-def capture_png(device: AndroidDevice) -> bytes:
-    api = get_android_api(device)
-    legacy_mode = 0 < api <= 23
-
-    display_size = get_current_display_size(device) if legacy_mode else None
-    attempts = 12 if legacy_mode else 1
-    last_png_size: Optional[tuple[int, int]] = None
-    last_error: Optional[str] = None
-
-    for attempt in range(attempts):
-        try:
-            if legacy_mode and attempt % 2 == 1:
-                data = _capture_png_remote_file(device)
-            else:
-                data = _capture_png_exec_out(device)
-        except RuntimeError as exc:
-            last_error = str(exc)
-            if not legacy_mode:
-                raise
-            time.sleep(0.35)
-            continue
-
-        png_size = png_dimensions(data)
-        if png_size is None:
-            last_error = "ADB вернул некорректные данные вместо PNG-снимка."
-            if not legacy_mode:
-                raise RuntimeError(last_error)
-            time.sleep(0.35)
-            continue
-
-        last_png_size = png_size
-
-        if legacy_mode:
-            # На старом Android геометрия может измениться между попытками,
-            # поэтому периодически перечитываем её.
-            if attempt in (3, 7):
-                refreshed = get_current_display_size(device)
-                if refreshed:
-                    display_size = refreshed
-
-            if _legacy_capture_geometry_is_stale(png_size, display_size):
-                time.sleep(0.45)
-                continue
-
-        return data
-
-    if legacy_mode and display_size and last_png_size:
-        raise RuntimeError(
-            "Android вернул несоответствующий текущему экрану framebuffer: "
-            f"PNG {last_png_size[0]}x{last_png_size[1]}, "
-            f"текущий дисплей {display_size[0]}x{display_size[1]}. "
-            "На старом Android это обычно означает конфликт с другим активным ADB-сеансом. "
-            "Неверный снимок НЕ сохранён. Дождитесь освобождения ADB и повторите снимок."
-        )
-
-    raise RuntimeError(last_error or "Не удалось получить корректный снимок экрана.")
-
+    if not result.stdout or not result.stdout.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise RuntimeError("ADB вернул некорректные данные вместо PNG-снимка.")
+    return result.stdout
 
 def save_screenshot(device: AndroidDevice, image_format: str) -> Path:
     png_data = capture_png(device)
