@@ -496,6 +496,38 @@ def _parse_display_size_from_text(text: str) -> Optional[tuple[int, int]]:
 
 
 def get_current_display_size(device: AndroidDevice) -> Optional[tuple[int, int]]:
+    # Для старых Android наиболее надёжна пара wm size + SurfaceOrientation:
+    # wm size обычно даёт размер матрицы в естественной ориентации,
+    # а SurfaceOrientation сообщает текущий поворот SurfaceFlinger.
+    try:
+        size_result = run_adb(["-s", device.serial, "shell", "wm", "size"], timeout=5)
+        size_text = (size_result.stdout or "") + "\n" + (size_result.stderr or "")
+        matches = re.findall(
+            r"(?:Physical|Override) size:\s*(\d+)x(\d+)",
+            size_text,
+            flags=re.I,
+        )
+        if matches:
+            width, height = map(int, matches[-1])
+            try:
+                input_result = run_adb(
+                    ["-s", device.serial, "shell", "dumpsys", "input"],
+                    timeout=8,
+                )
+                input_text = (input_result.stdout or "") + "\n" + (input_result.stderr or "")
+                match = re.search(r"SurfaceOrientation:\s*(\d+)", input_text)
+                if match:
+                    rotation = int(match.group(1))
+                    if rotation in (1, 3):
+                        return height, width
+                    if rotation in (0, 2):
+                        return width, height
+            except RuntimeError:
+                pass
+    except (RuntimeError, ValueError):
+        pass
+
+    # Запасные источники для vendor-ROM, где SurfaceOrientation отсутствует.
     probes = [
         ["-s", device.serial, "shell", "dumpsys", "window", "displays"],
         ["-s", device.serial, "shell", "dumpsys", "display"],
@@ -511,33 +543,7 @@ def get_current_display_size(device: AndroidDevice) -> Optional[tuple[int, int]]
         if size:
             return size
 
-    try:
-        size_result = run_adb(["-s", device.serial, "shell", "wm", "size"], timeout=5)
-        size_text = (size_result.stdout or "") + "\n" + (size_result.stderr or "")
-        matches = re.findall(r"(?:Physical|Override) size:\s*(\d+)x(\d+)", size_text, flags=re.I)
-        if not matches:
-            return None
-        width, height = map(int, matches[-1])
-
-        rotation = None
-        try:
-            input_result = run_adb(
-                ["-s", device.serial, "shell", "dumpsys", "input"],
-                timeout=8,
-            )
-            input_text = (input_result.stdout or "") + "\n" + (input_result.stderr or "")
-            match = re.search(r"SurfaceOrientation:\s*(\d+)", input_text)
-            if match:
-                rotation = int(match.group(1))
-        except RuntimeError:
-            pass
-
-        if rotation in (1, 3):
-            return height, width
-        return width, height
-    except (RuntimeError, ValueError):
-        return None
-
+    return None
 
 def _capture_png_exec_out(device: AndroidDevice) -> bytes:
     result = run_adb(
