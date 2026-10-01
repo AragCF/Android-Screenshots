@@ -8,18 +8,35 @@ echo ================================================================
 echo Android Screenshot Tool - build EXE
 echo ================================================================
 
-where python >nul 2>nul
-if errorlevel 1 (
-    echo [ERROR] Python not found in PATH.
-    echo Install Python 3 and enable "Add Python to PATH".
+set "PYTHON_CMD="
+python --version >nul 2>nul
+if not errorlevel 1 set "PYTHON_CMD=python"
+
+if not defined PYTHON_CMD (
+    py -3 --version >nul 2>nul
+    if not errorlevel 1 set "PYTHON_CMD=py -3"
+)
+
+if not defined PYTHON_CMD (
+    if exist "C:\ProgramData\miniconda3\python.exe" (
+        "C:\ProgramData\miniconda3\python.exe" --version >nul 2>nul
+        if not errorlevel 1 set "PYTHON_CMD="C:\ProgramData\miniconda3\python.exe""
+    )
+)
+
+if not defined PYTHON_CMD (
+    echo [ERROR] Python 3 not found.
+    echo Checked: python, py -3, C:\ProgramData\miniconda3\python.exe
     if "%NO_PAUSE%"=="0" pause
     exit /b 1
 )
 
+echo Python: %PYTHON_CMD%
+
 set "VENV=.venv-build-win"
 if not exist "%VENV%\Scripts\python.exe" (
     echo [1/5] Creating build environment...
-    python -m venv "%VENV%"
+    %PYTHON_CMD% -m venv "%VENV%"
     if errorlevel 1 goto :error
 ) else (
     echo [1/5] Build environment already exists.
