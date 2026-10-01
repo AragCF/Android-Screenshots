@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -19,7 +20,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 APP_NAME = "Android Screenshot Tool"
-APP_VERSION = "1.1.3"
+APP_VERSION = "1.1.4"
 JPEG_QUALITY = 99
 ADB_TIMEOUT = 30
 SCREENSHOTS_DIR = "Screenshots"
@@ -467,18 +468,121 @@ def build_output_path(device: AndroidDevice, image_format: str) -> Path:
         counter += 1
 
 
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+
+def _looks_like_png(data: bytes) -> bool:
+    return (
+        len(data) >= 24
+        and data.startswith(PNG_SIGNATURE)
+        and data[12:16] == b"IHDR"
+    )
+
+
+def _extract_png_from_mixed_output(data: bytes) -> Optional[bytes]:
+    if _looks_like_png(data):
+        return data
+
+    # Некоторые vendor ADB/shell добавляют текст перед бинарным потоком.
+    # Если настоящий PNG начинается чуть позже, аккуратно отбрасываем только префикс.
+    index = data.find(PNG_SIGNATURE, 0, min(len(data), 4096))
+    if index > 0:
+        candidate = data[index:]
+        if _looks_like_png(candidate):
+            return candidate
+    return None
+
+
+def _capture_png_via_pull(device: AndroidDevice) -> bytes:
+    token = f"android_screenshot_tool_{os.getpid()}_{int(time.time() * 1000)}.png"
+    remote_candidates = [
+        f"/data/local/tmp/{token}",
+        f"/sdcard/{token}",
+    ]
+
+    errors: list[str] = []
+
+    for remote in remote_candidates:
+        try:
+            create = run_adb(
+                ["-s", device.serial, "shell", "screencap", "-p", remote],
+                timeout=ADB_TIMEOUT,
+            )
+            if create.returncode != 0:
+                error = (create.stderr or create.stdout or "").strip()
+                errors.append(f"{remote}: {error or 'screencap завершился с ошибкой'}")
+                continue
+
+            with tempfile.TemporaryDirectory(prefix="android_screenshot_tool_") as temp_dir:
+                local = Path(temp_dir) / "screenshot.png"
+                pull = run_adb(
+                    ["-s", device.serial, "pull", remote, str(local)],
+                    timeout=ADB_TIMEOUT,
+                )
+                if pull.returncode != 0 or not local.exists():
+                    error = (pull.stderr or pull.stdout or "").strip()
+                    errors.append(f"{remote}: {error or 'adb pull не получил файл'}")
+                    continue
+
+                data = local.read_bytes()
+                png = _extract_png_from_mixed_output(data)
+                if png is not None:
+                    return png
+
+                errors.append(
+                    f"{remote}: полученный файл не является корректным PNG "
+                    f"({len(data)} байт)"
+                )
+        except (RuntimeError, OSError) as exc:
+            errors.append(f"{remote}: {exc}")
+        finally:
+            try:
+                run_adb(["-s", device.serial, "shell", "rm", "-f", remote], timeout=5)
+            except RuntimeError:
+                pass
+
+    raise RuntimeError(
+        "Резервный захват через временный файл Android тоже не удался. "
+        + " | ".join(errors[-4:])
+    )
+
+
 def capture_png(device: AndroidDevice) -> bytes:
     result = run_adb(
         ["-s", device.serial, "exec-out", "screencap", "-p"],
         timeout=ADB_TIMEOUT,
         binary=True,
     )
-    if result.returncode != 0:
+
+    primary_error = ""
+    if result.returncode == 0:
+        raw = result.stdout or b""
+        png = _extract_png_from_mixed_output(raw)
+        if png is not None:
+            return png
+
+        prefix = raw[:64]
+        prefix_hex = prefix.hex(" ")
+        prefix_text = prefix.decode("utf-8", errors="replace").replace("\r", "\\r").replace("\n", "\\n")
+        primary_error = (
+            f"exec-out вернул не PNG: {len(raw)} байт; "
+            f"начало HEX={prefix_hex}; TEXT={prefix_text!r}"
+        )
+    else:
         stderr = result.stderr.decode("utf-8", errors="replace").strip() if result.stderr else ""
-        raise RuntimeError(stderr or "Не удалось получить снимок экрана через adb screencap.")
-    if not result.stdout or not result.stdout.startswith(b"\x89PNG\r\n\x1a\n"):
-        raise RuntimeError("ADB вернул некорректные данные вместо PNG-снимка.")
-    return result.stdout
+        primary_error = stderr or f"exec-out screencap завершился с кодом {result.returncode}"
+
+    # Важный принцип: рабочий быстрый путь выше не меняется.
+    # Этот резервный путь запускается только если конкретное устройство
+    # не смогло вернуть корректный PNG через exec-out (например, Vivo vendor ADB).
+    try:
+        return _capture_png_via_pull(device)
+    except RuntimeError as fallback_error:
+        raise RuntimeError(
+            "ADB не вернул корректный PNG-снимок. "
+            f"Основной путь: {primary_error}. "
+            f"Резервный путь: {fallback_error}"
+        ) from fallback_error
 
 def save_screenshot(device: AndroidDevice, image_format: str) -> Path:
     png_data = capture_png(device)
