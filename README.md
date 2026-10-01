@@ -63,7 +63,7 @@ python android_screenshot_tool.py --version
 Windows EXE:
 
 ```bat
-AndroidScreenshotTool-v1.1.0-windows-x64.exe --version
+AndroidScreenshotTool-v1.1.4-windows-x64.exe --version
 ```
 
 После установки DEB:
@@ -181,7 +181,7 @@ chmod +x build_deb.sh
 Установка готового пакета:
 
 ```bash
-sudo apt install ./dist/android-screenshot-tool_1.1.0_*.deb
+sudo apt install ./dist/android-screenshot-tool_1.1.4_*.deb
 ```
 
 После установки запуск:
