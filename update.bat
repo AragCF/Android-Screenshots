@@ -60,14 +60,27 @@ if errorlevel 1 goto :error
 
 echo [4/9] Проверяю Python...
 set "PYTHON_CMD="
-where python >nul 2>nul && set "PYTHON_CMD=python"
+python --version >nul 2>nul
+if not errorlevel 1 set "PYTHON_CMD=python"
+
 if not defined PYTHON_CMD (
-    where py >nul 2>nul && set "PYTHON_CMD=py -3"
+    py -3 --version >nul 2>nul
+    if not errorlevel 1 set "PYTHON_CMD=py -3"
 )
+
+if not defined PYTHON_CMD (
+    if exist "C:\ProgramData\miniconda3\python.exe" (
+        "C:\ProgramData\miniconda3\python.exe" --version >nul 2>nul
+        if not errorlevel 1 set "PYTHON_CMD="C:\ProgramData\miniconda3\python.exe""
+    )
+)
+
 if not defined PYTHON_CMD (
     echo [ОШИБКА] Python 3 не найден.
+    echo Проверены: python, py -3, C:\ProgramData\miniconda3\python.exe
     goto :error
 )
+echo Python: %PYTHON_CMD%
 
 %PYTHON_CMD% -m py_compile android_screenshot_tool.py
 if errorlevel 1 goto :error
