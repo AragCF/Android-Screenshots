@@ -1,0 +1,241 @@
+name: Publish v1.1.4 now
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/release-v1.1.4-now.yml"
+
+permissions:
+  contents: write
+
+env:
+  PYTHON_VERSION: "3.12"
+  RELEASE_TAG: "v1.1.4"
+  RELEASE_VERSION: "1.1.4"
+  RELEASE_SHA: "d08ee20b17353134b357e0f71b2a23e85fb94ab5"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_SHA }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Validate release target
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+          test "$ACTUAL_SHA" = "$RELEASE_SHA"
+          python -m py_compile android_screenshot_tool.py
+          python android_screenshot_tool.py --version | grep -F "$RELEASE_VERSION"
+          APP_VERSION="$(python - <<'PY'
+          import re
+          from pathlib import Path
+          text = Path("android_screenshot_tool.py").read_text(encoding="utf-8")
+          m = re.search(r'^APP_VERSION\s*=\s*"([^"]+)"', text, re.M)
+          if not m:
+              raise SystemExit("APP_VERSION not found")
+          print(m.group(1))
+          PY
+          )"
+          test "$APP_VERSION" = "$RELEASE_VERSION"
+          echo "Validated release target: $RELEASE_TAG @ $RELEASE_SHA"
+
+  windows:
+    needs: validate
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_SHA }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Build and smoke-test Windows EXE
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m pip install --upgrade pip
+          python -m pip install "Pillow>=10.0" "PyInstaller>=6.0"
+          python -m PyInstaller --noconfirm --clean --onefile --console --name AndroidScreenshotTool android_screenshot_tool.py
+          New-Item -ItemType Directory -Force release | Out-Null
+          $target = "release/AndroidScreenshotTool-v$env:RELEASE_VERSION-windows-x64.exe"
+          Move-Item "dist/AndroidScreenshotTool.exe" $target
+          & $target --version
+          if ($LASTEXITCODE -ne 0) { throw "Windows EXE smoke test failed" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe
+          path: release/*.exe
+          if-no-files-found: error
+          retention-days: 3
+
+  debian:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_SHA }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Build and smoke-test Debian package
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev ffmpeg
+          python -m pip install --upgrade pip
+          python -m pip install "Pillow>=10.0" "PyInstaller>=6.0"
+
+          APP="android-screenshot-tool"
+          ARCH="$(dpkg --print-architecture)"
+          python -m PyInstaller --noconfirm --clean --onefile --console --name "$APP" android_screenshot_tool.py
+          ./dist/"$APP" --version | grep -F "$RELEASE_VERSION"
+
+          PKG="build/deb/${APP}_${RELEASE_VERSION}_${ARCH}"
+          mkdir -p "$PKG/DEBIAN" "$PKG/usr/bin" release
+          install -m 0755 "dist/$APP" "$PKG/usr/bin/$APP"
+
+          cat > "$PKG/DEBIAN/control" <<EOF
+          Package: $APP
+          Version: $RELEASE_VERSION
+          Section: utils
+          Priority: optional
+          Architecture: $ARCH
+          Depends: ffmpeg
+          Recommends: scrcpy
+          Maintainer: AragCF
+          Description: Interactive Android screenshot and video utility
+           Captures screenshots through adb and records H.264 video through scrcpy, supports
+           USB and network devices, persistent settings and timestamped filenames.
+          EOF
+
+          DEB="release/${APP}_${RELEASE_VERSION}_${ARCH}.deb"
+          dpkg-deb --build --root-owner-group "$PKG" "$DEB"
+          dpkg-deb --info "$DEB"
+          sudo dpkg -i "$DEB"
+          android-screenshot-tool --version | grep -F "$RELEASE_VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: debian-deb
+          path: release/*.deb
+          if-no-files-found: error
+          retention-days: 3
+
+  source:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_SHA }}
+          fetch-depth: 0
+      - name: Build clean source ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          git archive             --format=zip             --prefix="Android-Screenshot-Tool-v${RELEASE_VERSION}/"             -o "release/Android-Screenshot-Tool-v${RELEASE_VERSION}-source.zip"             "$RELEASE_SHA"
+
+          unzip -l "release/Android-Screenshot-Tool-v${RELEASE_VERSION}-source.zip"
+
+          if unzip -l "release/Android-Screenshot-Tool-v${RELEASE_VERSION}-source.zip"             | grep -E '(__pycache__|Screenshots/|Videos/|\.venv|/dist/|/build/)'; then
+            echo "Forbidden local/build content found in source archive"
+            exit 1
+          fi
+
+          unzip -l "release/Android-Screenshot-Tool-v${RELEASE_VERSION}-source.zip" | grep -F "LICENSE"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: source-zip
+          path: release/*-source.zip
+          if-no-files-found: error
+          retention-days: 3
+
+  publish:
+    needs: [windows, debian, source]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+
+      - name: Build checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release
+          sha256sum *.exe *.deb *.zip > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists; refusing to overwrite it."
+            exit 1
+          fi
+
+          gh release create "$RELEASE_TAG"             release/*             --repo "$GITHUB_REPOSITORY"             --target "$RELEASE_SHA"             --title "Android Screenshot Tool $RELEASE_VERSION"             --generate-notes
+
+      - name: Re-download and verify published assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir verify
+          gh release download "$RELEASE_TAG"             --repo "$GITHUB_REPOSITORY"             --dir verify
+
+          cd verify
+          test -f "AndroidScreenshotTool-v${RELEASE_VERSION}-windows-x64.exe"
+          test -f "android-screenshot-tool_${RELEASE_VERSION}_amd64.deb"
+          test -f "Android-Screenshot-Tool-v${RELEASE_VERSION}-source.zip"
+          test -f "SHA256SUMS.txt"
+          sha256sum -c SHA256SUMS.txt
+
+  final:
+    if: always()
+    needs: [validate, windows, debian, source, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Final project notification
+        shell: bash
+        env:
+          VALIDATE: ${{ needs.validate.result }}
+          WINDOWS: ${{ needs.windows.result }}
+          DEBIAN: ${{ needs.debian.result }}
+          SOURCE: ${{ needs.source.result }}
+          PUBLISH: ${{ needs.publish.result }}
+        run: |
+          set +e
+          urlencode() { python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$1"; }
+
+          if [ "$PUBLISH" = "success" ]; then
+            TITLE="[Android Screenshots] v1.1.4 опубликован"
+            TEXT="Релиз v1.1.4 опубликован и проверен обратным скачиванием: Windows EXE, Debian DEB, чистый source ZIP и SHA256SUMS совпали. Действий от пользователя не требуется."
+          else
+            TITLE="[Android Screenshots] Выпуск v1.1.4 остановился"
+            TEXT="Выпуск v1.1.4 завершился ошибкой: validate=$VALIDATE, windows=$WINDOWS, debian=$DEBIAN, source=$SOURCE, publish=$PUBLISH. Продолжаю диагностику по журналам GitHub Actions."
+          fi
+
+          curl -fsS --max-time 15             "https://thesystem.pro/?action=tg_Notify&Title=$(urlencode "$TITLE")&To=-1002159555744&Message=$(urlencode "$TEXT")&final=1"             >/dev/null 2>&1 || true
