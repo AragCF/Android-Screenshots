@@ -98,10 +98,11 @@ jobs:
           Priority: optional
           Architecture: $ARCH
           Depends: ffmpeg
+          Recommends: scrcpy
           Maintainer: AragCF
-          Description: Interactive ADB screenshot and video utility for Android devices
-           Captures Android screenshots through adb, supports USB and network devices,
-           PNG and JPEG quality 99, keyboard navigation and timestamped filenames.
+          Description: Interactive Android screenshot and video utility
+           Captures screenshots through adb and records H.264 video through scrcpy, supports
+           USB and network devices, persistent settings and timestamped filenames.
           EOF
           DEB="release/${APP}_${VERSION}_${ARCH}.deb"
           dpkg-deb --build --root-owner-group "$PKG" "$DEB"
