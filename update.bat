@@ -33,7 +33,19 @@ if errorlevel 1 (
     goto :error
 )
 
-echo [1/8] Проверяю рабочее дерево...
+echo [1/9] Проверяю доверие Git к каталогу...
+set "SAFE_REPO=%CD:\=/%"
+set "SAFE_FOUND=0"
+for /f "usebackq delims=" %%S in (`git config --global --get-all safe.directory 2^>nul`) do (
+    if /I "%%S"=="!SAFE_REPO!" set "SAFE_FOUND=1"
+)
+if "!SAFE_FOUND!"=="0" (
+    echo Добавляю безопасное исключение Git: !SAFE_REPO!
+    git config --global --add safe.directory "!SAFE_REPO!"
+    if errorlevel 1 goto :error
+)
+
+echo [2/9] Проверяю рабочее дерево...
 for /f "delims=" %%L in ('git status --porcelain') do (
     echo [ОШИБКА] В репозитории есть локальные изменения:
     git status --short
@@ -42,11 +54,11 @@ for /f "delims=" %%L in ('git status --porcelain') do (
     goto :error
 )
 
-echo [2/8] Получаю свежий main...
+echo [3/9] Получаю свежий main...
 git pull --ff-only origin main
 if errorlevel 1 goto :error
 
-echo [3/8] Проверяю Python...
+echo [4/9] Проверяю Python...
 set "PYTHON_CMD="
 where python >nul 2>nul && set "PYTHON_CMD=python"
 if not defined PYTHON_CMD (
@@ -62,7 +74,7 @@ if errorlevel 1 goto :error
 %PYTHON_CMD% android_screenshot_tool.py --version
 if errorlevel 1 goto :error
 
-echo [4/8] Проверяю ADB...
+echo [5/9] Проверяю ADB...
 where adb >nul 2>nul
 if errorlevel 1 (
     echo [ОШИБКА] adb не найден в PATH.
@@ -75,7 +87,7 @@ if errorlevel 1 (
     echo ADB найден.
 )
 
-echo [5/8] Проверяю scrcpy...
+echo [6/9] Проверяю scrcpy...
 where scrcpy >nul 2>nul
 if errorlevel 1 (
     where winget >nul 2>nul
@@ -90,7 +102,7 @@ if errorlevel 1 (
     echo scrcpy найден.
 )
 
-echo [6/8] Проверяю FFmpeg...
+echo [7/9] Проверяю FFmpeg...
 where ffmpeg >nul 2>nul
 if errorlevel 1 (
     where winget >nul 2>nul
@@ -105,11 +117,11 @@ if errorlevel 1 (
     echo FFmpeg найден.
 )
 
-echo [7/8] Пересобираю Windows EXE...
+echo [8/9] Пересобираю Windows EXE...
 call build_exe.bat --no-pause
 if errorlevel 1 goto :error
 
-echo [8/8] Итоговое состояние Git...
+echo [9/9] Итоговое состояние Git...
 git status --short --branch
 
 echo.
