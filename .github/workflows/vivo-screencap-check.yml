@@ -1,0 +1,35 @@
+name: Temporary Vivo screencap check
+
+on:
+  push:
+    branches:
+      - vivo-screencap-fallback-20261001
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile and test PNG fallback parsing
+        run: |
+          python -m py_compile android_screenshot_tool.py
+          python android_screenshot_tool.py --version
+          python - <<'PY'
+          import android_screenshot_tool as m
+          png = (
+              b"\x89PNG\r\n\x1a\n"
+              b"\x00\x00\x00\x0dIHDR"
+              b"\x00\x00\x00\x01"
+              b"\x00\x00\x00\x01"
+              b"\x08\x02\x00\x00\x00"
+          )
+          assert m._looks_like_png(png)
+          assert m._extract_png_from_mixed_output(png) == png
+          mixed = b"vendor warning\r\n" + png
+          assert m._extract_png_from_mixed_output(mixed) == png
+          assert m._extract_png_from_mixed_output(b"not a png") is None
+          print("Vivo PNG fallback parser: OK")
+          PY
