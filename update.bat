@@ -71,7 +71,7 @@ if not defined PYTHON_CMD (
 if not defined PYTHON_CMD (
     if exist "C:\ProgramData\miniconda3\python.exe" (
         "C:\ProgramData\miniconda3\python.exe" --version >nul 2>nul
-        if not errorlevel 1 set "PYTHON_CMD="C:\ProgramData\miniconda3\python.exe""
+        if not errorlevel 1 set "PYTHON_CMD=C:\ProgramData\miniconda3\python.exe"
     )
 )
 
