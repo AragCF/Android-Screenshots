@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
@@ -111,7 +112,8 @@ def clear_screen() -> None:
 def pause(message: str = "Нажмите любую клавишу для продолжения...") -> None:
     print()
     print(message)
-    read_key()
+    if read_key() == Key.CLOSE:
+        raise SystemExit(0)
 
 
 def read_key() -> str:
@@ -528,6 +530,16 @@ def build_output_path(device: AndroidDevice, image_format: str) -> Path:
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
+KNOWN_STALE_SCREENCAP_SHA256 = {
+    # Jetinno JL22 / UniWin_M190, Android 6:
+    # old vendor framebuffer repeatedly returned by screencap while the
+    # logical display has already moved on. Seen identically via USB/network,
+    # exec-out and device-file+pull.
+    "0bafc5252f4474e58d26dfca14a07201bd5bc8b7af6a14bf0b2b025778c3e711",
+}
+
+
+
 
 def _looks_like_png(data: bytes) -> bool:
     return (
@@ -605,6 +617,78 @@ def _capture_png_via_pull(device: AndroidDevice) -> bytes:
     )
 
 
+def _capture_png_via_screenrecord(device: AndroidDevice) -> bytes:
+    ffmpeg = ensure_ffmpeg()
+
+    result = run_adb(
+        [
+            "-s",
+            device.serial,
+            "exec-out",
+            "screenrecord",
+            "--time-limit",
+            "1",
+            "--output-format=h264",
+            "-",
+        ],
+        timeout=10,
+        binary=True,
+    )
+
+    if result.returncode != 0 or not result.stdout or len(result.stdout) < 512:
+        stderr = (
+            result.stderr.decode("utf-8", errors="replace").strip()
+            if result.stderr
+            else ""
+        )
+        raise RuntimeError(
+            stderr
+            or "Android screenrecord не вернул пригодный H.264-поток."
+        )
+
+    try:
+        decode = subprocess.run(
+            [
+                ffmpeg,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "h264",
+                "-i",
+                "pipe:0",
+                "-frames:v",
+                "1",
+                "-f",
+                "image2pipe",
+                "-vcodec",
+                "png",
+                "pipe:1",
+            ],
+            input=result.stdout,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=12,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("FFmpeg не успел декодировать резервный кадр.") from exc
+
+    png = _extract_png_from_mixed_output(decode.stdout or b"")
+    if decode.returncode != 0 or png is None:
+        error = (decode.stderr or b"").decode("utf-8", errors="replace").strip()
+        raise RuntimeError(
+            error or "FFmpeg не смог извлечь PNG из screenrecord."
+        )
+
+    return png
+
+
+def _is_known_stale_screencap(png: bytes) -> bool:
+    digest = hashlib.sha256(png).hexdigest()
+    return digest in KNOWN_STALE_SCREENCAP_SHA256
+
+
 def capture_png(device: AndroidDevice) -> bytes:
     result = run_adb(
         ["-s", device.serial, "exec-out", "screencap", "-p"],
@@ -617,6 +701,18 @@ def capture_png(device: AndroidDevice) -> bytes:
         raw = result.stdout or b""
         png = _extract_png_from_mixed_output(raw)
         if png is not None:
+            if _is_known_stale_screencap(png):
+                print(
+                    "Обнаружен известный залипший framebuffer Android 6; "
+                    "получаю актуальный кадр через видеотракт..."
+                )
+                try:
+                    return _capture_png_via_screenrecord(device)
+                except RuntimeError as exc:
+                    raise RuntimeError(
+                        "JL22 вернул известный устаревший framebuffer, "
+                        f"а резервный screenrecord не сработал: {exc}"
+                    ) from exc
             return png
 
         prefix = raw[:64]
