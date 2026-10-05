@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 APP_NAME = "Android Screenshot Tool"
-APP_VERSION = "1.1.4"
+APP_VERSION = "1.1.5"
 JPEG_QUALITY = 99
 ADB_TIMEOUT = 30
 SCREENSHOTS_DIR = "Screenshots"
@@ -61,6 +61,47 @@ class Key:
     DOWN = "DOWN"
     ENTER = "ENTER"
     ESC = "ESC"
+    CLOSE = "CLOSE"
+
+
+APP_EXIT_REQUESTED = threading.Event()
+_WINDOWS_CONSOLE_HANDLER = None
+
+
+def request_app_exit() -> None:
+    APP_EXIT_REQUESTED.set()
+
+
+def install_windows_console_close_handler() -> bool:
+    global _WINDOWS_CONSOLE_HANDLER
+
+    if os.name != "nt":
+        return False
+    if _WINDOWS_CONSOLE_HANDLER is not None:
+        return True
+
+    try:
+        import ctypes
+
+        handler_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_uint)
+
+        @handler_type
+        def handler(ctrl_type: int) -> bool:
+            # CTRL_CLOSE_EVENT (Alt+F4 / closing the console window),
+            # CTRL_LOGOFF_EVENT and CTRL_SHUTDOWN_EVENT.
+            if ctrl_type in (2, 5, 6):
+                request_app_exit()
+                return True
+            return False
+
+        if not ctypes.windll.kernel32.SetConsoleCtrlHandler(handler, True):
+            return False
+
+        # Keep a Python reference alive for as long as the process runs.
+        _WINDOWS_CONSOLE_HANDLER = handler
+        return True
+    except Exception:
+        return False
 
 
 def clear_screen() -> None:
@@ -77,15 +118,25 @@ def read_key() -> str:
     if os.name == "nt":
         import msvcrt
 
-        ch = msvcrt.getwch()
-        if ch in ("\x00", "\xe0"):
-            code = msvcrt.getwch()
-            return {"H": Key.UP, "P": Key.DOWN}.get(code, "")
-        if ch == "\r":
-            return Key.ENTER
-        if ch == "\x1b":
-            return Key.ESC
-        return ch
+        # Do not block forever in getwch(): the Windows console close handler
+        # must be able to wake the UI when the user presses Alt+F4.
+        while True:
+            if APP_EXIT_REQUESTED.is_set():
+                return Key.CLOSE
+
+            if not msvcrt.kbhit():
+                time.sleep(0.03)
+                continue
+
+            ch = msvcrt.getwch()
+            if ch in ("\x00", "\xe0"):
+                code = msvcrt.getwch()
+                return {"H": Key.UP, "P": Key.DOWN}.get(code, "")
+            if ch == "\r":
+                return Key.ENTER
+            if ch == "\x1b":
+                return Key.ESC
+            return ch
 
     import termios
     import tty
@@ -122,9 +173,14 @@ def read_key_timeout(timeout: float) -> Optional[str]:
 
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
+            if APP_EXIT_REQUESTED.is_set():
+                return Key.CLOSE
             if msvcrt.kbhit():
                 return read_key()
             time.sleep(0.03)
+
+        if APP_EXIT_REQUESTED.is_set():
+            return Key.CLOSE
         return None
 
     import select
@@ -318,6 +374,8 @@ def menu_choice(
     while True:
         render_menu(title, items, selected_index, footer)
         key = read_key()
+        if key == Key.CLOSE:
+            raise SystemExit(0)
         if key == Key.UP:
             selected_index = (selected_index - 1) % len(items)
         elif key == Key.DOWN:
@@ -1353,7 +1411,7 @@ def record_video(
 
     while process.poll() is None:
         key = read_key_timeout(0.25)
-        if key in {Key.ENTER, Key.ESC, "0"}:
+        if key in {Key.ENTER, Key.ESC, Key.CLOSE, "0"}:
             break
 
     _stop_scrcpy(process)
@@ -1496,6 +1554,8 @@ def wait_for_adb_ready() -> None:
 
 
 def main() -> int:
+    install_windows_console_close_handler()
+
     if len(sys.argv) == 2 and sys.argv[1] in {"--version", "-V"}:
         print(f"{APP_NAME} {APP_VERSION}")
         return 0
