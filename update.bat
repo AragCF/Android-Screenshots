@@ -136,6 +136,13 @@ if errorlevel 1 goto :error
 
 echo [9/9] Итоговое состояние Git...
 git status --short --branch
+echo.
+if exist "dist\AndroidScreenshotTool-next.exe" (
+    echo ВНИМАНИЕ: текущий EXE был занят работающей программой.
+    echo Новая версия подготовлена здесь:
+    echo   %CD%\dist\AndroidScreenshotTool-next.exe
+    echo После закрытия старого экземпляра можно запускать этот файл.
+)
 
 echo.
 echo ================================================================
