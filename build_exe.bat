@@ -53,12 +53,34 @@ echo [3/5] Installing build dependencies...
 if errorlevel 1 goto :error
 
 echo [4/5] Building EXE...
-"%PY%" -m PyInstaller --noconfirm --clean --onefile --console --name AndroidScreenshotTool android_screenshot_tool.py
+set "NEW_DIST=dist\_new_build"
+set "NEW_WORK=build\_new_build"
+if exist "%NEW_DIST%" rmdir /S /Q "%NEW_DIST%"
+if exist "%NEW_WORK%" rmdir /S /Q "%NEW_WORK%"
+
+"%PY%" -m PyInstaller --noconfirm --clean --onefile --console --name AndroidScreenshotTool --distpath "%NEW_DIST%" --workpath "%NEW_WORK%" android_screenshot_tool.py
 if errorlevel 1 goto :error
 
-echo [5/5] Done.
+echo [5/5] Publishing EXE...
+if not exist "dist" mkdir "dist"
+
+copy /Y "%NEW_DIST%\AndroidScreenshotTool.exe" "dist\AndroidScreenshotTool.exe" >nul 2>nul
+if not errorlevel 1 (
+    if exist "dist\AndroidScreenshotTool-next.exe" del /Q "dist\AndroidScreenshotTool-next.exe" >nul 2>nul
+    echo.
+    echo EXE: %CD%\dist\AndroidScreenshotTool.exe
+    if "%NO_PAUSE%"=="0" pause
+    exit /b 0
+)
+
+copy /Y "%NEW_DIST%\AndroidScreenshotTool.exe" "dist\AndroidScreenshotTool-next.exe" >nul
+if errorlevel 1 goto :error
+
 echo.
-echo EXE: %CD%\dist\AndroidScreenshotTool.exe
+echo [WARNING] Current AndroidScreenshotTool.exe is running or locked.
+echo New EXE was saved without terminating the running program:
+echo %CD%\dist\AndroidScreenshotTool-next.exe
+echo Close the old program before replacing the canonical EXE.
 if "%NO_PAUSE%"=="0" pause
 exit /b 0
 
