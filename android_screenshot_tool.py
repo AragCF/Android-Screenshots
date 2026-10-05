@@ -765,7 +765,59 @@ def _capture_png_via_pull(device: AndroidDevice) -> bytes:
     )
 
 
+def _visible_secure_layer_names(device: AndroidDevice) -> list[str]:
+    try:
+        result = run_adb(
+            ["-s", device.serial, "shell", "dumpsys", "SurfaceFlinger"],
+            timeout=8,
+        )
+    except RuntimeError:
+        return []
+
+    if result.returncode != 0:
+        return []
+
+    names: list[str] = []
+    current_name: Optional[str] = None
+
+    for raw_line in (result.stdout or "").splitlines():
+        line = raw_line.strip()
+
+        layer_match = re.match(r"\+\s+Layer\s+\S+\s+\((.+)\)$", line)
+        if layer_match:
+            current_name = layer_match.group(1)
+            continue
+
+        if current_name and "flags=0x" in line:
+            match = re.search(r"flags=0x([0-9a-fA-F]+)", line)
+            if match:
+                flags = int(match.group(1), 16)
+                if flags & 0x80:  # SurfaceControl.SECURE
+                    names.append(current_name)
+            current_name = None
+
+    return names
+
+
+def _ensure_no_visible_secure_layers_for_recording(
+    device: AndroidDevice,
+) -> None:
+    secure_layers = _visible_secure_layer_names(device)
+    if not secure_layers:
+        return
+
+    names = ", ".join(secure_layers[:3])
+    raise RuntimeError(
+        "Android защищает текущее окно от снимков и записи (FLAG_SECURE). "
+        f"Защищённые слои: {names}. "
+        "Обычный screenrecord намеренно заменяет такое содержимое чёрным. "
+        "Для полного снимка нужна сервисная/отладочная версия приложения "
+        "без FLAG_SECURE."
+    )
+
+
 def _capture_png_via_screenrecord(device: AndroidDevice) -> bytes:
+    _ensure_no_visible_secure_layers_for_recording(device)
     ffmpeg = ensure_ffmpeg()
 
     result = run_adb(
