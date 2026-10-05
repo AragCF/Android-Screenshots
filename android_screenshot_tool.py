@@ -28,11 +28,20 @@ SCREENSHOTS_DIR = "Screenshots"
 VIDEOS_DIR = "Videos"
 FPS_OPTIONS = (6, 12, 24, 30, 45, 60)
 
+SCREENSHOT_CAPTURE_MODES = ("auto", "stream", "file", "screenrecord")
+SCREENSHOT_CAPTURE_MODE_LABELS = {
+    "auto": "Авто",
+    "stream": "screencap / поток",
+    "file": "screencap / файл",
+    "screenrecord": "screenrecord / кадр",
+}
+
 DEFAULT_SETTINGS = {
     "last_device_serial": None,
     "image_format": "PNG",
     "video_fps": 30,
     "video_audio": False,
+    "screenshot_capture_modes": {},
 }
 
 
@@ -60,6 +69,8 @@ class TinycapProfile:
 class Key:
     UP = "UP"
     DOWN = "DOWN"
+    LEFT = "LEFT"
+    RIGHT = "RIGHT"
     ENTER = "ENTER"
     ESC = "ESC"
     CLOSE = "CLOSE"
@@ -133,7 +144,12 @@ def read_key() -> str:
             ch = msvcrt.getwch()
             if ch in ("\x00", "\xe0"):
                 code = msvcrt.getwch()
-                return {"H": Key.UP, "P": Key.DOWN}.get(code, "")
+                return {
+                    "H": Key.UP,
+                    "P": Key.DOWN,
+                    "K": Key.LEFT,
+                    "M": Key.RIGHT,
+                }.get(code, "")
             if ch == "\r":
                 return Key.ENTER
             if ch == "\x1b":
@@ -163,6 +179,10 @@ def read_key() -> str:
                 return Key.UP
             if seq == "[B":
                 return Key.DOWN
+            if seq == "[D":
+                return Key.LEFT
+            if seq == "[C":
+                return Key.RIGHT
             return Key.ESC
         return ch
     finally:
@@ -232,6 +252,15 @@ def load_settings() -> dict:
     if settings.get("video_fps") not in FPS_OPTIONS:
         settings["video_fps"] = 30
     settings["video_audio"] = bool(settings.get("video_audio", False))
+
+    capture_modes = settings.get("screenshot_capture_modes")
+    if not isinstance(capture_modes, dict):
+        capture_modes = {}
+    settings["screenshot_capture_modes"] = {
+        str(key): value
+        for key, value in capture_modes.items()
+        if value in SCREENSHOT_CAPTURE_MODES
+    }
     return settings
 
 
@@ -329,6 +358,78 @@ def list_devices() -> list[AndroidDevice]:
     return enriched
 
 
+DEVICE_PERSISTENT_KEY_CACHE: dict[str, str] = {}
+
+
+def device_persistent_key(device: AndroidDevice) -> str:
+    cached = DEVICE_PERSISTENT_KEY_CACHE.get(device.serial)
+    if cached:
+        return cached
+
+    key = f"serial:{device.serial}"
+    if device.is_ready:
+        try:
+            result = run_adb(
+                ["-s", device.serial, "shell", "getprop", "ro.serialno"],
+                timeout=5,
+            )
+            serialno = (result.stdout or "").strip()
+            if (
+                result.returncode == 0
+                and serialno
+                and serialno.lower() not in {"unknown", "none", "null"}
+            ):
+                key = f"device:{serialno}"
+        except RuntimeError:
+            pass
+
+    DEVICE_PERSISTENT_KEY_CACHE[device.serial] = key
+    return key
+
+
+def get_screenshot_capture_mode(settings: dict, device: AndroidDevice) -> str:
+    modes = settings.setdefault("screenshot_capture_modes", {})
+    stable_key = device_persistent_key(device)
+    mode = modes.get(stable_key)
+
+    if mode not in SCREENSHOT_CAPTURE_MODES:
+        mode = modes.get(f"serial:{device.serial}", "auto")
+
+    if mode not in SCREENSHOT_CAPTURE_MODES:
+        mode = "auto"
+    return mode
+
+
+def set_screenshot_capture_mode(
+    settings: dict,
+    device: AndroidDevice,
+    mode: str,
+) -> None:
+    if mode not in SCREENSHOT_CAPTURE_MODES:
+        raise ValueError(f"Неизвестный режим снимка: {mode}")
+
+    modes = settings.setdefault("screenshot_capture_modes", {})
+    modes[device_persistent_key(device)] = mode
+    # Keep a transport-specific alias as a fallback. If USB and network
+    # expose the same ro.serialno, the stable key transparently shares mode.
+    modes[f"serial:{device.serial}"] = mode
+    save_settings(settings)
+
+
+def cycle_screenshot_capture_mode(
+    settings: dict,
+    device: AndroidDevice,
+    direction: int,
+) -> str:
+    current = get_screenshot_capture_mode(settings, device)
+    index = SCREENSHOT_CAPTURE_MODES.index(current)
+    mode = SCREENSHOT_CAPTURE_MODES[
+        (index + (1 if direction >= 0 else -1)) % len(SCREENSHOT_CAPTURE_MODES)
+    ]
+    set_screenshot_capture_mode(settings, device, mode)
+    return mode
+
+
 def device_state_label(state: str) -> str:
     return {
         "device": "готово",
@@ -388,7 +489,13 @@ def menu_choice(
             return key
 
 
-def choose_device(current: Optional[AndroidDevice] = None) -> Optional[AndroidDevice]:
+def choose_device(
+    current: Optional[AndroidDevice] = None,
+    settings: Optional[dict] = None,
+) -> Optional[AndroidDevice]:
+    if settings is None:
+        settings = load_settings()
+
     while True:
         try:
             devices = list_devices()
@@ -408,41 +515,82 @@ def choose_device(current: Optional[AndroidDevice] = None) -> Optional[AndroidDe
             pause()
             return current
 
-        menu: list[tuple[str, str]] = []
-        index_map: dict[str, AndroidDevice] = {}
         selected_index = 0
+        if current:
+            for index, device in enumerate(devices):
+                if device.serial == current.serial:
+                    selected_index = index
+                    break
 
-        for idx, device in enumerate(devices, start=1):
-            key = str(idx)
-            status = device_state_label(device.state)
-            label = f"{device.display_name}  [{device.serial}]  — {status}"
-            menu.append((key, label))
-            index_map[key] = device
-            if current and device.serial == current.serial:
-                selected_index = idx - 1
+        while True:
+            menu: list[tuple[str, str]] = []
+            for idx, device in enumerate(devices, start=1):
+                status = device_state_label(device.state)
+                mode = get_screenshot_capture_mode(settings, device)
+                mode_label = SCREENSHOT_CAPTURE_MODE_LABELS[mode]
+                label = (
+                    f"{device.display_name}  [{device.serial}]  — {status}"
+                    f"  [снимок: {mode_label}]"
+                )
+                menu.append((str(idx), label))
 
-        menu.append(("0", "Назад"))
-        choice = menu_choice(
-            "Выбор Android-устройства",
-            menu,
-            selected_index=selected_index,
-        )
-        if choice == "0":
-            return current
-
-        device = index_map[choice]
-        if not device.is_ready:
-            clear_screen()
-            print(
-                f"Устройство {device.serial} сейчас недоступно: "
-                f"{device_state_label(device.state)}."
+            menu.append(("0", "Назад"))
+            render_menu(
+                "Выбор Android-устройства",
+                menu,
+                selected_index=min(selected_index, len(menu) - 1),
+                footer=(
+                    "←/→ — изменить режим снимка для выделенного устройства; "
+                    "режим запоминается между запусками."
+                ),
             )
-            if device.state == "unauthorized":
-                print("Разблокируйте Android и подтвердите RSA-разрешение ADB.")
-            pause()
-            continue
-        return device
 
+            key = read_key()
+            if key == Key.CLOSE:
+                raise SystemExit(0)
+            if key == Key.UP:
+                selected_index = (selected_index - 1) % len(menu)
+                continue
+            if key == Key.DOWN:
+                selected_index = (selected_index + 1) % len(menu)
+                continue
+
+            if key in {Key.LEFT, Key.RIGHT}:
+                if selected_index < len(devices):
+                    device = devices[selected_index]
+                    cycle_screenshot_capture_mode(
+                        settings,
+                        device,
+                        1 if key == Key.RIGHT else -1,
+                    )
+                continue
+
+            if key == Key.ENTER:
+                choice_index = selected_index
+            elif key == "0":
+                return current
+            elif key.isdigit() and 1 <= int(key) <= len(devices):
+                choice_index = int(key) - 1
+                selected_index = choice_index
+            else:
+                continue
+
+            if choice_index >= len(devices):
+                return current
+
+            device = devices[choice_index]
+            if not device.is_ready:
+                clear_screen()
+                print(
+                    f"Устройство {device.serial} сейчас недоступно: "
+                    f"{device_state_label(device.state)}."
+                )
+                if device.state == "unauthorized":
+                    print("Разблокируйте Android и подтвердите RSA-разрешение ADB.")
+                pause()
+                break
+
+            return device
 
 def is_network_serial(serial: str) -> bool:
     return bool(re.match(r"^\[[^\]]+\]:\d+$", serial) or re.match(r"^[^:]+:\d+$", serial))
@@ -689,57 +837,128 @@ def _is_known_stale_screencap(png: bytes) -> bool:
     return digest in KNOWN_STALE_SCREENCAP_SHA256
 
 
-def capture_png(device: AndroidDevice) -> bytes:
+def _capture_png_stream(device: AndroidDevice) -> bytes:
     result = run_adb(
         ["-s", device.serial, "exec-out", "screencap", "-p"],
         timeout=ADB_TIMEOUT,
         binary=True,
     )
-
-    primary_error = ""
-    if result.returncode == 0:
-        raw = result.stdout or b""
-        png = _extract_png_from_mixed_output(raw)
-        if png is not None:
-            if _is_known_stale_screencap(png):
-                print(
-                    "Обнаружен известный залипший framebuffer Android 6; "
-                    "получаю актуальный кадр через видеотракт..."
-                )
-                try:
-                    return _capture_png_via_screenrecord(device)
-                except RuntimeError as exc:
-                    raise RuntimeError(
-                        "JL22 вернул известный устаревший framebuffer, "
-                        f"а резервный screenrecord не сработал: {exc}"
-                    ) from exc
-            return png
-
-        prefix = raw[:64]
-        prefix_hex = prefix.hex(" ")
-        prefix_text = prefix.decode("utf-8", errors="replace").replace("\r", "\\r").replace("\n", "\\n")
-        primary_error = (
-            f"exec-out вернул не PNG: {len(raw)} байт; "
-            f"начало HEX={prefix_hex}; TEXT={prefix_text!r}"
+    if result.returncode != 0:
+        stderr = (
+            result.stderr.decode("utf-8", errors="replace").strip()
+            if result.stderr
+            else ""
         )
-    else:
-        stderr = result.stderr.decode("utf-8", errors="replace").strip() if result.stderr else ""
-        primary_error = stderr or f"exec-out screencap завершился с кодом {result.returncode}"
-
-    # Важный принцип: рабочий быстрый путь выше не меняется.
-    # Этот резервный путь запускается только если конкретное устройство
-    # не смогло вернуть корректный PNG через exec-out (например, Vivo vendor ADB).
-    try:
-        return _capture_png_via_pull(device)
-    except RuntimeError as fallback_error:
         raise RuntimeError(
-            "ADB не вернул корректный PNG-снимок. "
-            f"Основной путь: {primary_error}. "
-            f"Резервный путь: {fallback_error}"
-        ) from fallback_error
+            stderr or f"exec-out screencap завершился с кодом {result.returncode}"
+        )
 
-def save_screenshot(device: AndroidDevice, image_format: str) -> Path:
-    png_data = capture_png(device)
+    raw = result.stdout or b""
+    png = _extract_png_from_mixed_output(raw)
+    if png is not None:
+        return png
+
+    prefix = raw[:64]
+    prefix_hex = prefix.hex(" ")
+    prefix_text = (
+        prefix.decode("utf-8", errors="replace")
+        .replace("\r", "\\r")
+        .replace("\n", "\\n")
+    )
+    raise RuntimeError(
+        f"exec-out вернул не PNG: {len(raw)} байт; "
+        f"начало HEX={prefix_hex}; TEXT={prefix_text!r}"
+    )
+
+
+def _apply_known_stale_guard(
+    device: AndroidDevice,
+    png: bytes,
+    source_name: str,
+) -> bytes:
+    if not _is_known_stale_screencap(png):
+        return png
+
+    print(
+        f"Режим «{source_name}» вернул известный залипший framebuffer Android 6; "
+        "получаю актуальный кадр через видеотракт..."
+    )
+    try:
+        return _capture_png_via_screenrecord(device)
+    except RuntimeError as exc:
+        raise RuntimeError(
+            "JL22 вернул известный устаревший framebuffer, "
+            f"а резервный screenrecord не сработал: {exc}"
+        ) from exc
+
+
+def capture_png(
+    device: AndroidDevice,
+    capture_mode: str = "auto",
+) -> bytes:
+    if capture_mode not in SCREENSHOT_CAPTURE_MODES:
+        capture_mode = "auto"
+
+    if capture_mode == "screenrecord":
+        return _capture_png_via_screenrecord(device)
+
+    if capture_mode == "stream":
+        png = _capture_png_stream(device)
+        return _apply_known_stale_guard(
+            device,
+            png,
+            SCREENSHOT_CAPTURE_MODE_LABELS["stream"],
+        )
+
+    if capture_mode == "file":
+        png = _capture_png_via_pull(device)
+        return _apply_known_stale_guard(
+            device,
+            png,
+            SCREENSHOT_CAPTURE_MODE_LABELS["file"],
+        )
+
+    # AUTO: keep the fastest known-good path first. If it fails as a protocol
+    # operation, try file+pull, then video. If any screencap path returns the
+    # exact known stale JL22 framebuffer, the SHA-256 guard immediately wins
+    # over the user's preferred path and switches to screenrecord.
+    errors: list[str] = []
+
+    try:
+        png = _capture_png_stream(device)
+        return _apply_known_stale_guard(
+            device,
+            png,
+            SCREENSHOT_CAPTURE_MODE_LABELS["stream"],
+        )
+    except RuntimeError as exc:
+        errors.append(f"поток: {exc}")
+
+    try:
+        png = _capture_png_via_pull(device)
+        return _apply_known_stale_guard(
+            device,
+            png,
+            SCREENSHOT_CAPTURE_MODE_LABELS["file"],
+        )
+    except RuntimeError as exc:
+        errors.append(f"файл: {exc}")
+
+    try:
+        return _capture_png_via_screenrecord(device)
+    except RuntimeError as exc:
+        errors.append(f"видеокадр: {exc}")
+
+    raise RuntimeError(
+        "Ни один способ захвата экрана не сработал. " + " | ".join(errors)
+    )
+
+def save_screenshot(
+    device: AndroidDevice,
+    image_format: str,
+    capture_mode: str = "auto",
+) -> Path:
+    png_data = capture_png(device, capture_mode)
     output = build_output_path(device, image_format)
 
     if image_format == "PNG":
@@ -1615,7 +1834,7 @@ def video_settings_menu(
                 continue
 
             if selected_device is None:
-                selected_device = choose_device(None)
+                selected_device = choose_device(None, settings)
                 if selected_device is None:
                     continue
 
@@ -1708,7 +1927,7 @@ def main() -> int:
 
         if choice == "1":
             main_selected_index = 0
-            selected_device = choose_device(selected_device)
+            selected_device = choose_device(selected_device, settings)
             if selected_device:
                 settings["last_device_serial"] = selected_device.serial
                 save_settings(settings)
@@ -1744,7 +1963,7 @@ def main() -> int:
         if choice in {"2", "3"}:
             main_selected_index = 1 if choice == "2" else 2
             if selected_device is None:
-                selected_device = choose_device(None)
+                selected_device = choose_device(None, settings)
                 if selected_device is None:
                     continue
                 settings["last_device_serial"] = selected_device.serial
@@ -1763,7 +1982,7 @@ def main() -> int:
                 clear_screen()
                 print("Выбранное устройство больше не доступно. Выберите устройство заново.")
                 pause()
-                selected_device = choose_device(None)
+                selected_device = choose_device(None, settings)
                 if selected_device:
                     settings["last_device_serial"] = selected_device.serial
                     save_settings(settings)
@@ -1775,7 +1994,12 @@ def main() -> int:
             clear_screen()
             print(f"Снимаю экран: {selected_device.display_name} [{selected_device.serial}]...")
             try:
-                output = save_screenshot(selected_device, image_format)
+                capture_mode = get_screenshot_capture_mode(settings, selected_device)
+                output = save_screenshot(
+                    selected_device,
+                    image_format,
+                    capture_mode,
+                )
             except RuntimeError as exc:
                 print(f"Ошибка: {exc}")
                 pause()
