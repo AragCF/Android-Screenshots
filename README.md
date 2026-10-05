@@ -1,4 +1,4 @@
-# Android Screenshot Tool 1.1.4
+# Android Screenshot Tool 1.1.5
 
 Консольная утилита для Windows и Linux, которая делает снимки экрана Android через `adb`.
 
@@ -63,7 +63,7 @@ python android_screenshot_tool.py --version
 Windows EXE:
 
 ```bat
-AndroidScreenshotTool-v1.1.4-windows-x64.exe --version
+AndroidScreenshotTool-v1.1.5-windows-x64.exe --version
 ```
 
 После установки DEB:
@@ -82,6 +82,25 @@ android-screenshot-tool --version
 4. Формат снимка: PNG/JPG.
 5. Настройки видео.
 0. Выйти.
+
+## JL22 / UniWin_M190 и stale framebuffer
+
+На Jetinno JL22 / UniWin_M190 с Android 6 обнаружен vendor-дефект: системный `screencap` иногда продолжает возвращать старый аварийный framebuffer, хотя реальный логический экран уже другой. Ошибка повторяется одинаково по USB и сетевому ADB.
+
+Диагностика на физическом устройстве показала:
+
+- `adb exec-out screencap -p` → старый кадр 800×1280;
+- `screencap` во временный файл + `adb pull` → тот же байт-в-байт кадр;
+- SHA-256 этого известного stale-кадра: `0bafc5252f4474e58d26dfca14a07201bd5bc8b7af6a14bf0b2b025778c3e711`;
+- `screenrecord` в тот же момент видит настоящий актуальный экран 1280×800.
+
+Поэтому начиная с 1.1.5 программа работает хирургически: обычный `screencap` остаётся основным путём для всех устройств, но если получен именно известный stale SHA-256 JL22, программа на одну секунду использует `screenrecord` и извлекает первый актуальный кадр через FFmpeg.
+
+Это не эвристика по ориентации и не глобальная замена `screencap`; рабочее поведение остальных устройств не меняется.
+
+## Alt+F4 на Windows
+
+На Windows консольное приложение теперь обрабатывает закрытие окна / Alt+F4 через системный `CTRL_CLOSE_EVENT`. Меню опрашивает клавиатуру без вечной блокировки, поэтому приложение может корректно выйти. Если в этот момент идёт запись видео, утилита пытается сначала штатно остановить видеопроцесс и завершить упаковку файла.
 
 ## Резервный захват снимка
 
@@ -181,7 +200,7 @@ chmod +x build_deb.sh
 Установка готового пакета:
 
 ```bash
-sudo apt install ./dist/android-screenshot-tool_1.1.4_*.deb
+sudo apt install ./dist/android-screenshot-tool_1.1.5_*.deb
 ```
 
 После установки запуск:
