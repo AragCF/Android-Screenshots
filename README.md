@@ -57,9 +57,9 @@ C:\ProgramData\CreativeForceTeam\bin\
 - Product version;
 - Product name;
 - File description;
-- Company name: AragCF;
+- Company name: Creative Force;
 - Original filename;
-- Copyright.
+- Copyright: `Copyright © DJ Andrey Isák`.
 
 Источник номера версии один — `APP_VERSION`; файл ресурсов генерируется перед сборкой.
 
