@@ -15,13 +15,15 @@ import sys
 import threading
 import tempfile
 import time
+import urllib.request
+import zipfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Optional
 
 APP_NAME = "Android Screenshot Tool"
-APP_VERSION = "1.1.5"
+APP_VERSION = "1.1.6"
 JPEG_QUALITY = 99
 ADB_TIMEOUT = 30
 SCREENSHOTS_DIR = "Screenshots"
@@ -1128,6 +1130,73 @@ def ensure_ffmpeg() -> str:
     return path
 
 
+SCRCPY_PORTABLE_VERSION = "5.0.1"
+SCRCPY_PORTABLE_URL = (
+    "https://github.com/Genymobile/scrcpy/releases/download/"
+    "v5.0.1/scrcpy-win64-v5.0.1.zip"
+)
+SCRCPY_PORTABLE_SHA256 = (
+    "b12a2c4ee8be317422451fc7dcf8ee20a71b5ea7ef9ad73ddd825a25316227a5"
+)
+
+
+def winget_candidates() -> list[Path]:
+    result: list[Path] = []
+
+    found = shutil.which("winget")
+    if found:
+        result.append(Path(found))
+
+    if os.name != "nt":
+        return result
+
+    local = os.getenv("LOCALAPPDATA")
+    program_files = os.getenv("ProgramFiles")
+
+    if local:
+        result.extend(
+            [
+                Path(local) / "Microsoft" / "WindowsApps" / "winget.exe",
+                Path(local) / "Microsoft" / "WinGet" / "Links" / "winget.exe",
+            ]
+        )
+
+    if program_files:
+        windows_apps = Path(program_files) / "WindowsApps"
+        if windows_apps.exists():
+            try:
+                result.extend(windows_apps.glob("Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe/winget.exe"))
+            except OSError:
+                pass
+
+    return result
+
+
+def locate_winget() -> Optional[str]:
+    for candidate in winget_candidates():
+        try:
+            if candidate.is_file():
+                return str(candidate)
+        except OSError:
+            continue
+    return None
+
+
+def scrcpy_portable_dir() -> Optional[Path]:
+    if os.name != "nt":
+        return None
+    local = os.getenv("LOCALAPPDATA")
+    if not local:
+        return None
+    return (
+        Path(local)
+        / "AndroidScreenshotTool"
+        / "tools"
+        / "scrcpy"
+        / f"v{SCRCPY_PORTABLE_VERSION}"
+    )
+
+
 def scrcpy_candidates() -> list[Path]:
     result: list[Path] = []
 
@@ -1136,18 +1205,146 @@ def scrcpy_candidates() -> list[Path]:
         result.append(Path(found))
 
     if os.name == "nt":
+        portable = scrcpy_portable_dir()
+        if portable:
+            result.append(portable / "scrcpy.exe")
+
         local = os.getenv("LOCALAPPDATA")
         if local:
-            result.append(Path(local) / "Microsoft" / "WinGet" / "Links" / "scrcpy.exe")
+            result.extend(
+                [
+                    Path(local) / "Microsoft" / "WinGet" / "Links" / "scrcpy.exe",
+                    Path(local) / "Microsoft" / "WindowsApps" / "scrcpy.exe",
+                ]
+            )
+            packages = Path(local) / "Microsoft" / "WinGet" / "Packages"
+            if packages.exists():
+                try:
+                    result.extend(packages.glob("Genymobile.scrcpy_*/*/scrcpy.exe"))
+                    result.extend(packages.glob("Genymobile.scrcpy_*/scrcpy.exe"))
+                except OSError:
+                    pass
+
+        program_files = os.getenv("ProgramFiles")
+        if program_files:
+            result.append(Path(program_files) / "WinGet" / "Links" / "scrcpy.exe")
 
     return result
 
 
 def locate_scrcpy() -> Optional[str]:
+    seen: set[str] = set()
     for candidate in scrcpy_candidates():
-        if candidate.exists():
-            return str(candidate)
+        key = os.path.normcase(str(candidate))
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            if candidate.is_file():
+                return str(candidate)
+        except OSError:
+            continue
     return None
+
+
+def _download_to_file(url: str, target: Path) -> None:
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"},
+    )
+    with urllib.request.urlopen(request, timeout=45) as response:
+        with target.open("wb") as output:
+            shutil.copyfileobj(response, output)
+
+
+def _safe_extract_zip(archive: Path, destination: Path) -> None:
+    destination_resolved = destination.resolve()
+    with zipfile.ZipFile(archive, "r") as zf:
+        for info in zf.infolist():
+            target = (destination / info.filename).resolve()
+            try:
+                target.relative_to(destination_resolved)
+            except ValueError as exc:
+                raise RuntimeError(
+                    "Архив scrcpy содержит небезопасный путь."
+                ) from exc
+        zf.extractall(destination)
+
+
+def install_scrcpy_portable() -> Optional[str]:
+    if os.name != "nt":
+        return None
+
+    target_dir = scrcpy_portable_dir()
+    if target_dir is None:
+        return None
+
+    existing = target_dir / "scrcpy.exe"
+    if existing.is_file():
+        return str(existing)
+
+    target_dir.parent.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.TemporaryDirectory(
+        prefix="android_screenshot_tool_scrcpy_"
+    ) as temp_name:
+        temp = Path(temp_name)
+        archive = temp / "scrcpy.zip"
+        extracted = temp / "extracted"
+
+        try:
+            print(
+                f"WinGet недоступен или не установил scrcpy; "
+                f"скачиваю официальный scrcpy {SCRCPY_PORTABLE_VERSION}..."
+            )
+            _download_to_file(SCRCPY_PORTABLE_URL, archive)
+        except Exception as exc:
+            print(f"Не удалось скачать scrcpy: {exc}")
+            return None
+
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        if digest.lower() != SCRCPY_PORTABLE_SHA256.lower():
+            print(
+                "Контрольная сумма scrcpy не совпала; "
+                "скачанный архив удалён и не будет запущен."
+            )
+            return None
+
+        try:
+            extracted.mkdir()
+            _safe_extract_zip(archive, extracted)
+        except (OSError, zipfile.BadZipFile, RuntimeError) as exc:
+            print(f"Не удалось распаковать scrcpy: {exc}")
+            return None
+
+        matches = list(extracted.rglob("scrcpy.exe"))
+        if len(matches) != 1:
+            print(
+                "В официальном архиве scrcpy найдено неожиданное "
+                f"число scrcpy.exe: {len(matches)}."
+            )
+            return None
+
+        source_root = matches[0].parent
+        staged = target_dir.with_name(target_dir.name + ".staging")
+        try:
+            if staged.exists():
+                shutil.rmtree(staged)
+            shutil.copytree(source_root, staged)
+            if target_dir.exists():
+                shutil.rmtree(target_dir)
+            os.replace(staged, target_dir)
+        except OSError as exc:
+            print(f"Не удалось установить переносимый scrcpy: {exc}")
+            try:
+                if staged.exists():
+                    shutil.rmtree(staged)
+            except OSError:
+                pass
+            return None
+
+    installed = target_dir / "scrcpy.exe"
+    return str(installed) if installed.is_file() else None
 
 
 def install_scrcpy() -> Optional[str]:
@@ -1161,26 +1358,29 @@ def install_scrcpy() -> Optional[str]:
     print()
 
     if os.name == "nt":
-        winget = shutil.which("winget")
-        if not winget:
-            return None
-        result = subprocess.run(
-            [
-                winget,
-                "install",
-                "--id",
-                "Genymobile.scrcpy",
-                "--exact",
-                "--source",
-                "winget",
-                "--accept-package-agreements",
-                "--accept-source-agreements",
-            ],
-            check=False,
-        )
-        if result.returncode != 0:
-            return None
-        return locate_scrcpy()
+        winget = locate_winget()
+        if winget:
+            result = subprocess.run(
+                [
+                    winget,
+                    "install",
+                    "--id",
+                    "Genymobile.scrcpy",
+                    "--exact",
+                    "--source",
+                    "winget",
+                    "--accept-package-agreements",
+                    "--accept-source-agreements",
+                    "--disable-interactivity",
+                ],
+                check=False,
+            )
+            if result.returncode == 0:
+                installed = locate_scrcpy()
+                if installed:
+                    return installed
+
+        return install_scrcpy_portable()
 
     apt = shutil.which("apt-get")
     if apt:
@@ -1202,8 +1402,9 @@ def ensure_scrcpy() -> tuple[str, str]:
     path = locate_scrcpy() or install_scrcpy()
     if not path:
         raise RuntimeError(
-            "scrcpy не найден и автоматически установить его не удалось. "
-            "На Windows выполните: winget install --exact Genymobile.scrcpy"
+            "scrcpy не найден, а автоматическая установка через WinGet "
+            "и официальный переносимый пакет не удалась. "
+            "Проверьте доступ к github.com/Genymobile/scrcpy и повторите попытку."
         )
 
     result = subprocess.run(
