@@ -1,4 +1,4 @@
-# Android Screenshot Tool 1.1.6
+# Android Screenshot Tool 1.1.7
 
 Консольная утилита для Windows и Linux, которая делает снимки экрана Android через `adb`.
 
@@ -24,6 +24,38 @@
 - `offline` и `unauthorized` показываются в списке, но не выбираются как рабочие;
 - при запуске исходного `.py` Pillow для JPG устанавливается автоматически, если отсутствует;
 - EXE и DEB собираются как автономные бинарники с Pillow внутри.
+
+### Windows: системная установка scrcpy на Studio
+
+Для Studio поддерживается машинная установка scrcpy в:
+
+```text
+C:\ProgramData\CreativeForceTeam\tools\scrcpy\5.0\
+```
+
+Этот путь проверяется программой напрямую, поэтому запись видео не зависит от того, под каким пользователем был установлен WinGet и попал ли пользовательский `WindowsApps` в `PATH`.
+
+WinGet на Studio обслуживается как компонент Microsoft App Installer. Для интерактивных пользователей команда дополнительно выводится через машинный каталог:
+
+```text
+C:\ProgramData\CreativeForceTeam\bin\
+```
+
+Каталог добавляется в системный `PATH`.
+
+### Метаданные Windows EXE
+
+Начиная с 1.1.7 Windows EXE содержит обычные version resources. В свойствах файла Windows заполняются:
+
+- File version;
+- Product version;
+- Product name;
+- File description;
+- Company name: AragCF;
+- Original filename;
+- Copyright.
+
+Источник номера версии один — `APP_VERSION`; файл ресурсов генерируется перед сборкой.
 
 ## Требования
 
@@ -63,7 +95,7 @@ python android_screenshot_tool.py --version
 Windows EXE:
 
 ```bat
-AndroidScreenshotTool-v1.1.6-windows-x64.exe --version
+AndroidScreenshotTool-v1.1.7-windows-x64.exe --version
 ```
 
 После установки DEB:
@@ -244,7 +276,7 @@ chmod +x build_deb.sh
 Установка готового пакета:
 
 ```bash
-sudo apt install ./dist/android-screenshot-tool_1.1.6_*.deb
+sudo apt install ./dist/android-screenshot-tool_1.1.7_*.deb
 ```
 
 После установки запуск:
