@@ -1,4 +1,4 @@
-# Android Screenshot Tool 1.1.7
+# Android Screenshot Tool 1.1.8
 
 Консольная утилита для Windows и Linux, которая делает снимки экрана Android через `adb`.
 
@@ -24,6 +24,12 @@
 - `offline` и `unauthorized` показываются в списке, но не выбираются как рабочие;
 - при запуске исходного `.py` Pillow для JPG устанавливается автоматически, если отсутствует;
 - EXE и DEB собираются как автономные бинарники с Pillow внутри.
+
+### Единый ADB-клиент для scrcpy
+
+Начиная с 1.1.8 программа всегда запускает scrcpy с переменной окружения `ADB`, указывающей на тот же `adb.exe`, которым пользуется сама утилита. Это устраняет конфликт между встроенным ADB из комплекта scrcpy и Android Platform Tools при нескольких одновременно подключённых устройствах.
+
+Практический симптом исправленного дефекта: scrcpy уже выбирал нужный serial, но затем `adb reverse`/forward мог завершаться ошибкой `more than one device/emulator`.
 
 ### Windows: системная установка scrcpy на Studio
 
@@ -95,7 +101,7 @@ python android_screenshot_tool.py --version
 Windows EXE:
 
 ```bat
-AndroidScreenshotTool-v1.1.7-windows-x64.exe --version
+AndroidScreenshotTool-v1.1.8-windows-x64.exe --version
 ```
 
 После установки DEB:
@@ -276,7 +282,7 @@ chmod +x build_deb.sh
 Установка готового пакета:
 
 ```bash
-sudo apt install ./dist/android-screenshot-tool_1.1.7_*.deb
+sudo apt install ./dist/android-screenshot-tool_1.1.8_*.deb
 ```
 
 После установки запуск:
