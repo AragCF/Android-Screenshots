@@ -1225,6 +1225,17 @@ def scrcpy_candidates() -> list[Path]:
                 except OSError:
                     pass
 
+        program_data = os.getenv("ProgramData")
+        if program_data:
+            result.append(
+                Path(program_data)
+                / "CreativeForceTeam"
+                / "tools"
+                / "scrcpy"
+                / f"v{SCRCPY_PORTABLE_VERSION}"
+                / "scrcpy.exe"
+            )
+
         program_files = os.getenv("ProgramFiles")
         if program_files:
             result.append(Path(program_files) / "WinGet" / "Links" / "scrcpy.exe")
