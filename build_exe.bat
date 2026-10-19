@@ -34,12 +34,24 @@ if not defined PYTHON_CMD (
 echo Python: %PYTHON_CMD%
 
 set "VENV=.venv-build-win"
+set "VENV_REBUILD=0"
+if exist "%VENV%\Scripts\python.exe" (
+    "%VENV%\Scripts\python.exe" --version >nul 2>nul
+    if errorlevel 1 set "VENV_REBUILD=1"
+)
+
+if "%VENV_REBUILD%"=="1" (
+    echo [1/5] Existing build environment is stale. Recreating it...
+    rmdir /S /Q "%VENV%"
+    if exist "%VENV%" goto :error
+)
+
 if not exist "%VENV%\Scripts\python.exe" (
     echo [1/5] Creating build environment...
     %PYTHON_CMD% -m venv "%VENV%"
     if errorlevel 1 goto :error
 ) else (
-    echo [1/5] Build environment already exists.
+    echo [1/5] Build environment is healthy.
 )
 
 set "PY=%VENV%\Scripts\python.exe"
