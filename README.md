@@ -1,4 +1,4 @@
-# Android Screenshot Tool 1.1.5
+# Android Screenshot Tool 1.1.6
 
 Консольная утилита для Windows и Linux, которая делает снимки экрана Android через `adb`.
 
@@ -63,7 +63,7 @@ python android_screenshot_tool.py --version
 Windows EXE:
 
 ```bat
-AndroidScreenshotTool-v1.1.5-windows-x64.exe --version
+AndroidScreenshotTool-v1.1.6-windows-x64.exe --version
 ```
 
 После установки DEB:
@@ -155,6 +155,21 @@ adb -s <serial> exec-out screencap -p
 
 Известный редкий сбой UniWin_M190 при одновременной нагрузке от другого ADB-клиента пока не блокируется автоматически: надёжнее временно получить редкий неверный кадр, чем отвергать правильные снимки. Для этого случая нужна отдельная диагностика именно поведения старого `adbd/SurfaceFlinger`.
 
+### Установка scrcpy без обязательного WinGet
+
+Начиная с 1.1.6 WinGet больше не является обязательной предпосылкой записи видео на Windows.
+
+Порядок такой:
+
+1. программа ищет уже установленный `scrcpy`;
+2. если доступен WinGet, сначала пробует штатный пакет `Genymobile.scrcpy`;
+3. если WinGet отсутствует или его источник пакетов неисправен, программа сама скачивает официальный `scrcpy-win64-v5.0.zip` из релиза Genymobile;
+4. перед распаковкой проверяется закреплённая SHA-256 контрольная сумма;
+5. проверенный scrcpy устанавливается только в пользовательский каталог `%LOCALAPPDATA%\AndroidScreenshotTool\tools\scrcpy-5.0\`;
+6. после установки запускается проверка версии и наличия параметра `--record`.
+
+Таким образом отсутствие или повреждение WinGet больше не блокирует запись видео.
+
 ## Видео
 
 Начиная с 1.1.1 запись выполняется через **scrcpy**, а не через самодельную цепочку `screenrecord → FFmpeg`. Это важно по трём причинам:
@@ -229,7 +244,7 @@ chmod +x build_deb.sh
 Установка готового пакета:
 
 ```bash
-sudo apt install ./dist/android-screenshot-tool_1.1.5_*.deb
+sudo apt install ./dist/android-screenshot-tool_1.1.6_*.deb
 ```
 
 После установки запуск:
