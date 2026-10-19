@@ -41,39 +41,44 @@ if exist "%VENV%\Scripts\python.exe" (
 )
 
 if "%VENV_REBUILD%"=="1" (
-    echo [1/5] Existing build environment is stale. Recreating it...
+    echo [1/6] Existing build environment is stale. Recreating it...
     rmdir /S /Q "%VENV%"
     if exist "%VENV%" goto :error
 )
 
 if not exist "%VENV%\Scripts\python.exe" (
-    echo [1/5] Creating build environment...
+    echo [1/6] Creating build environment...
     %PYTHON_CMD% -m venv "%VENV%"
     if errorlevel 1 goto :error
 ) else (
-    echo [1/5] Build environment is healthy.
+    echo [1/6] Build environment is healthy.
 )
 
 set "PY=%VENV%\Scripts\python.exe"
 
-echo [2/5] Updating pip...
+echo [2/6] Updating pip...
 "%PY%" -m pip install --upgrade pip
 if errorlevel 1 goto :error
 
-echo [3/5] Installing build dependencies...
+echo [3/6] Installing build dependencies...
 "%PY%" -m pip install -r requirements-build.txt
 if errorlevel 1 goto :error
 
-echo [4/5] Building EXE...
+echo [4/6] Generating Windows version resources...
+"%PY%" generate_windows_version_info.py
+if errorlevel 1 goto :error
+if not exist "windows_version_info.txt" goto :error
+
+echo [5/6] Building EXE...
 set "NEW_DIST=dist\_new_build"
 set "NEW_WORK=build\_new_build"
 if exist "%NEW_DIST%" rmdir /S /Q "%NEW_DIST%"
 if exist "%NEW_WORK%" rmdir /S /Q "%NEW_WORK%"
 
-"%PY%" -m PyInstaller --noconfirm --clean --onefile --console --name AndroidScreenshotTool --distpath "%NEW_DIST%" --workpath "%NEW_WORK%" android_screenshot_tool.py
+"%PY%" -m PyInstaller --noconfirm --clean --onefile --console --name AndroidScreenshotTool --version-file "windows_version_info.txt" --distpath "%NEW_DIST%" --workpath "%NEW_WORK%" android_screenshot_tool.py
 if errorlevel 1 goto :error
 
-echo [5/5] Publishing EXE...
+echo [6/6] Publishing EXE...
 if not exist "dist" mkdir "dist"
 
 copy /Y "%NEW_DIST%\AndroidScreenshotTool.exe" "dist\AndroidScreenshotTool.exe" >nul 2>nul
