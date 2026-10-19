@@ -54,7 +54,8 @@ jobs:
           $ErrorActionPreference = "Stop"
           python -m pip install --upgrade pip
           python -m pip install "Pillow>=10.0" "PyInstaller>=6.0"
-          python -m PyInstaller --noconfirm --clean --onefile --console --name AndroidScreenshotTool android_screenshot_tool.py
+          python generate_windows_version_info.py
+          python -m PyInstaller --noconfirm --clean --onefile --console --name AndroidScreenshotTool --version-file windows_version_info.txt android_screenshot_tool.py
           $version = "${{ github.ref_name }}".TrimStart("v")
           New-Item -ItemType Directory -Force release | Out-Null
           $target = "release/AndroidScreenshotTool-v$version-windows-x64.exe"
