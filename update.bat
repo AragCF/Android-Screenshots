@@ -107,6 +107,10 @@ if errorlevel 1 (
     if not errorlevel 1 (
         echo Устанавливаю scrcpy через WinGet...
         winget install --id Genymobile.scrcpy --exact --source winget --accept-package-agreements --accept-source-agreements
+        if errorlevel 1 (
+            echo [ПРЕДУПРЕЖДЕНИЕ] WinGet не установил scrcpy.
+            echo Программа 1.1.6 сама попробует официальный архив scrcpy при первой записи.
+        )
     ) else (
         echo [ПРЕДУПРЕЖДЕНИЕ] scrcpy не найден, WinGet недоступен.
         echo Программа попробует установить scrcpy при первой записи видео.
