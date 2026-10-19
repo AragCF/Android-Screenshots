@@ -1,0 +1,71 @@
+name: "[Android Screenshots] Project notification"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".cf-ops/project-notify.json"
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: [self-hosted, cf-online]
+    timeout-minutes: 5
+    outputs:
+      project: ${{ steps.req.outputs.project }}
+      title: ${{ steps.req.outputs.title }}
+      message: ${{ steps.req.outputs.message }}
+      progress: ${{ steps.req.outputs.progress }}
+      waiting_human: ${{ steps.req.outputs.waiting_human }}
+      has_error: ${{ steps.req.outputs.has_error }}
+      final: ${{ steps.req.outputs.final }}
+      strict_channel_test: ${{ steps.req.outputs.strict_channel_test }}
+      task_key: ${{ steps.req.outputs.task_key }}
+      notification_id: ${{ steps.req.outputs.notification_id }}
+      kind: ${{ steps.req.outputs.kind }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          sparse-checkout: .cf-ops/project-notify.json
+          sparse-checkout-cone-mode: false
+      - id: req
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          p=Path('.cf-ops/project-notify.json')
+          d=json.loads(p.read_text(encoding='utf-8'))
+          required=('project','title','message','progress','waiting_human','has_error','final','strict_channel_test','task_key','notification_id','kind')
+          missing=[k for k in required if k not in d]
+          if missing:
+              raise SystemExit('notification_request_missing:'+','.join(missing))
+          out=Path(os.environ['GITHUB_OUTPUT'])
+          with out.open('a',encoding='utf-8') as f:
+              for k in required:
+                  v=d[k]
+                  if isinstance(v,bool):
+                      v='true' if v else 'false'
+                  f.write(f"{k}={v}\n")
+          PY
+
+  notify:
+    needs: prepare
+    uses: creative-force-team/thesystem/.github/workflows/cf-project-notify.yml@4385eccfd0ec218a2b0f6c02ae61fa5630b419e8
+    with:
+      project: ${{ needs.prepare.outputs.project }}
+      title: ${{ needs.prepare.outputs.title }}
+      message: ${{ needs.prepare.outputs.message }}
+      progress: ${{ needs.prepare.outputs.progress }}
+      waiting_human: ${{ needs.prepare.outputs.waiting_human == 'true' }}
+      has_error: ${{ needs.prepare.outputs.has_error == 'true' }}
+      final: ${{ needs.prepare.outputs.final == 'true' }}
+      strict_channel_test: ${{ needs.prepare.outputs.strict_channel_test == 'true' }}
+      task_key: ${{ needs.prepare.outputs.task_key }}
+      notification_id: ${{ needs.prepare.outputs.notification_id }}
+      kind: ${{ needs.prepare.outputs.kind }}
+      publish_artifacts: false

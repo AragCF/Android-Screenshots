@@ -1,0 +1,15 @@
+{
+  "schema": "cf.project.notification.request.v1",
+  "project": "Android Screenshots",
+  "title": "Исправляю WinGet и scrcpy на Studio",
+  "message": "Подтверждаю задачу: восстановить WinGet на Studio, установить и проверить scrcpy, затем сделать автоустановку видео-зависимостей Android Screenshot Tool устойчивой без ручных команд. Выполнено 0 / осталось 5 / всего 5 шагов.",
+  "progress": 0,
+  "waiting_human": false,
+  "has_error": true,
+  "final": false,
+  "strict_channel_test": true,
+  "task_key": "android-screenshots:studio-winget-scrcpy:20261019",
+  "notification_id": "android-screenshots:studio-winget-scrcpy:20261019:start",
+  "kind": "start",
+  "publish_artifacts": false
+}
