@@ -32,11 +32,11 @@ resource = f"""VSVersionInfo(
       StringTable(
         '040904B0',
         [
-          StringStruct('CompanyName', 'AragCF'),
+          StringStruct('CompanyName', 'Creative Force'),
           StringStruct('FileDescription', 'Android Screenshot Tool'),
           StringStruct('FileVersion', '{file_version}'),
           StringStruct('InternalName', 'AndroidScreenshotTool'),
-          StringStruct('LegalCopyright', 'Copyright (c) 2026 AragCF'),
+          StringStruct('LegalCopyright', 'Copyright © DJ Andrey Isák'),
           StringStruct('OriginalFilename', 'AndroidScreenshotTool.exe'),
           StringStruct('ProductName', 'Android Screenshot Tool'),
           StringStruct('ProductVersion', '{version}')
