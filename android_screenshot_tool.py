@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 APP_NAME = "Android Screenshot Tool"
-APP_VERSION = "1.1.7"
+APP_VERSION = "1.1.8"
 JPEG_QUALITY = 99
 ADB_TIMEOUT = 30
 SCREENSHOTS_DIR = "Screenshots"
@@ -1903,11 +1903,19 @@ def record_video(
 
     log_handle = log.open("wb")
     video_start = time.monotonic()
+
+    # Force scrcpy to use exactly the same ADB client as the rest of this
+    # application. This avoids transport-selection failures when several
+    # Android devices are connected and scrcpy ships its own adb.exe.
+    scrcpy_env = os.environ.copy()
+    scrcpy_env["ADB"] = adb_path()
+
     process = subprocess.Popen(
         command,
         stdout=log_handle,
         stderr=subprocess.STDOUT,
         creationflags=creationflags,
+        env=scrcpy_env,
     )
 
     if tinycap_profile:
