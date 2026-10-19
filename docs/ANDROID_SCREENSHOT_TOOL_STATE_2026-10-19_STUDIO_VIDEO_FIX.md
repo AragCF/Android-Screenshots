@@ -65,10 +65,10 @@ Confirmed from clean pinned source:
   - FileVersion: `1.1.8.0`
   - ProductVersion: `1.1.8`
   - ProductName: `Android Screenshot Tool`
-  - CompanyName: `AragCF`
+  - CompanyName: `Creative Force`
   - FileDescription: `Android Screenshot Tool`
   - OriginalFilename: `AndroidScreenshotTool.exe`
-  - LegalCopyright: `Copyright (c) 2026 AragCF`
+  - LegalCopyright: `Copyright © DJ Andrey Isák`
 - built SHA-256:
   `2fc14f8746aacc3f4138a8cbad86851c2148228efc6b2e0f6014d278982ef672`
 
