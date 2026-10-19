@@ -2,6 +2,8 @@
 
 ## 1.1.8 — 2026-10-19
 
+- Уточнены Windows-метаданные EXE: Company Name = `Creative Force`, Copyright = `Copyright © DJ Andrey Isák`.
+
 - Исправлена запись видео при нескольких одновременно подключённых Android-устройствах.
 - scrcpy теперь всегда получает переменную окружения `ADB` с точным путём к тому же `adb.exe`, которым пользуется Android Screenshot Tool.
 - Устранён подтверждённый на Studio сбой: scrcpy выбирал нужный serial, но его собственный ADB затем падал на `adb reverse` / forward с сообщением `more than one device/emulator`.
