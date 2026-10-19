@@ -1,5 +1,15 @@
 # Изменения
 
+## 1.1.7 — 2026-10-19
+
+- Исправлена зависимость записи видео от профиля Windows: scrcpy ищется также в машинной установке `C:\\ProgramData\\CreativeForceTeam\\tools\\scrcpy\\5.0\\scrcpy.exe`.
+- Для Studio scrcpy устанавливается машинно и добавляется в системный PATH; пользовательские установки WinGet/scrcpy больше не являются единственным источником.
+- WinGet обслуживается как Microsoft App Installer и дополнительно публикуется через машинный каталог `C:\\ProgramData\\CreativeForceTeam\\bin`.
+- Windows EXE теперь получает version resources из `APP_VERSION`: FileVersion, ProductVersion, ProductName, FileDescription, CompanyName, OriginalFilename и Copyright.
+- Добавлен `generate_windows_version_info.py`, чтобы номер версии EXE не расходился с версией программы.
+- Сборщик Windows перед PyInstaller автоматически генерирует актуальный `windows_version_info.txt`.
+
+
 ## 1.1.6 — 2026-10-19
 
 - Windows-запись видео больше не зависит от обязательного наличия рабочего WinGet.
