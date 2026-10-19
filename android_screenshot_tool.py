@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 APP_NAME = "Android Screenshot Tool"
-APP_VERSION = "1.1.6"
+APP_VERSION = "1.1.7"
 JPEG_QUALITY = 99
 ADB_TIMEOUT = 30
 SCREENSHOTS_DIR = "Screenshots"
@@ -1139,6 +1139,22 @@ def ensure_ffmpeg() -> str:
     return path
 
 
+def machine_tools_dir() -> Optional[Path]:
+    if os.name != "nt":
+        return None
+    program_data = os.getenv("PROGRAMDATA")
+    if not program_data:
+        program_data = r"C:\ProgramData"
+    return Path(program_data) / "CreativeForceTeam" / "tools"
+
+
+def machine_scrcpy_dir() -> Optional[Path]:
+    root = machine_tools_dir()
+    if root is None:
+        return None
+    return root / "scrcpy" / SCRCPY_MANAGED_VERSION
+
+
 def managed_tools_dir() -> Path:
     if os.name == "nt":
         local = os.getenv("LOCALAPPDATA")
@@ -1157,6 +1173,11 @@ def scrcpy_candidates() -> list[Path]:
     found = shutil.which("scrcpy")
     if found:
         result.append(Path(found))
+
+    if os.name == "nt":
+        machine = machine_scrcpy_dir()
+        if machine is not None:
+            result.append(machine / "scrcpy.exe")
 
     result.append(managed_scrcpy_dir() / "scrcpy.exe")
 
@@ -1354,7 +1375,9 @@ def ensure_scrcpy() -> tuple[str, str]:
     if not path:
         raise RuntimeError(
             "scrcpy не найден и автоматически установить его не удалось. "
-            "Проверьте доступ к GitHub или установите scrcpy вручную."
+            "Проверены PATH, машинная установка ProgramData, пользовательская "
+            "управляемая копия и WinGet. Проверьте доступ к GitHub или "
+            "установите scrcpy вручную."
         )
 
     result = subprocess.run(
