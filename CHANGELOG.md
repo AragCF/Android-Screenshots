@@ -1,5 +1,15 @@
 # Изменения
 
+## 1.1.6 — 2026-10-19
+
+- Windows-запись видео больше не зависит жёстко от наличия WinGet.
+- Добавлен поиск `winget.exe` в WindowsApps и App Installer, а `scrcpy.exe` — в WinGet Links/Packages и собственном каталоге Android Screenshot Tool.
+- Если WinGet отсутствует или не дал пригодный scrcpy, программа скачивает официальный `scrcpy-win64-v5.0.1.zip` напрямую из Genymobile GitHub Releases.
+- Прямой пакет закреплён точным SHA-256 `b12a2c4ee8be317422451fc7dcf8ee20a71b5ea7ef9ad73ddd825a25316227a5`; несовпадение блокирует установку.
+- ZIP проходит защиту от path traversal и устанавливается в пользовательский каталог `%LOCALAPPDATA%\\AndroidScreenshotTool\\tools\\scrcpy\\v5.0.1`.
+- Сообщение об ошибке больше не предлагает пользователю выполнить несуществующий `winget`; оно сообщает о фактическом отказе обоих автоматических способов.
+
+
 ## 1.1.5 — 2026-10-05
 
 - Исправлен повторяющийся stale framebuffer на Jetinno JL22 / UniWin_M190 (Android 6).
